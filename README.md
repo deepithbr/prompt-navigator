@@ -17,6 +17,9 @@ Works as a Chrome extension or as two Tampermonkey userscripts. The files are th
 - The model and effort the chat is running, read live, so switching either updates the header
 - Conversation size in tokens, measured
 - Session and weekly plan usage, with a marker showing how much of each window has elapsed
+- A search palette over the questions themselves, across every thread, not just this one. Press **Alt+K** or click `⌕` in the rail header. Results from the open thread come first. Picking one from another thread opens it and jumps straight to that question
+
+> Alt+K, not Ctrl+K, because Ctrl+K is claude.ai's own palette and binding over it would have taken away a feature you already use. The two do different jobs: Claude's finds threads by title, this one finds the questions inside them.
 
 **On `chatgpt.com`**
 
@@ -45,7 +48,12 @@ No permissions are requested. The extension declares no `permissions` and no `ho
 
 ## What it reads
 
-Everything stays in your browser. Nothing is sent anywhere, and there is no server, no analytics and no storage beyond one `localStorage` flag remembering whether you pinned the rail open.
+Everything stays in your browser. Nothing is sent anywhere, and there is no server and no analytics.
+
+Two things are stored locally, both on your own machine and neither ever transmitted:
+
+- a `localStorage` flag remembering whether you pinned the rail open
+- an IndexedDB database, `cpn-index`, holding your thread titles and the text of questions in threads you have opened, so the search palette can answer without a network round trip. Clearing site data for `claude.ai` removes it
 
 On `claude.ai` it calls the same endpoints the page itself calls, using your existing session:
 
@@ -56,6 +64,7 @@ On `claude.ai` it calls the same endpoints the page itself calls, using your exi
 | `/api/organizations/{org}/conversations/{id}/wiggle/list-files` | documents the thread produced |
 | `/api/organizations/{org}/projects/{id}` | document and file counts, for a tooltip |
 | `/api/organizations/{org}/usage` | session and weekly plan usage |
+| `/api/organizations/{org}/chat_conversations` | thread titles for the search palette |
 
 On `chatgpt.com`:
 
@@ -76,6 +85,7 @@ These are deliberate. Earlier versions guessed at them and the guesses were wron
 - **Jumping to an unloaded message is approximate.** Claude virtualises the message list and programmatic scrolling does not remount older messages. Clicking a question from an unloaded part of the thread shows you its full text and moves you to roughly the right place.
 - **Cowork is partial.** `/cowork/` sessions are not served by the conversation API. The rail falls back to listing what is on screen and says `N on screen` so the count is not mistaken for the whole session.
 - **ChatGPT message caps are not available.** `/backend-api/usage`, `/rate_limits` and `/conversation_limit` all return 404 and the model list carries no quota fields. Only the agent and task window is exposed, which is what the meter shows.
+- **Search covers titles everywhere, question text only where you have been.** claude.ai has no search endpoint, so the palette builds its own index. Thread titles are cheap and all of them are indexed. Question text is only indexed for threads you actually open, because fetching every thread up front measured at 5.7 minutes and 40MB. The index fills in as you use Claude normally.
 - **These are undocumented internal endpoints.** Anthropic and OpenAI can change them without notice, and when they do this breaks. There is a `MANUAL_SELECTOR` escape hatch at the top of the Claude script for the most likely breakage.
 
 ---

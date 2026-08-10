@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Prompt Navigator
 // @namespace    local.deepith
-// @version      3.3.0
+// @version      3.4.0
 // @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it falls back to listing the messages currently on screen.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -1227,7 +1227,21 @@
       }).catch(() => {});
     });
 
-    top.append(headCount, hand, pin);
+    /*
+     * The palette needs a visible way in. Alt+K is not a chord anyone guesses,
+     * and Ctrl+K was not available — claude.ai binds it to its own palette.
+     */
+    const find = document.createElement('button');
+    find.className = 'cpn-pin';
+    find.type = 'button';
+    find.title = 'Search your questions across every thread  (Alt+K)';
+    find.textContent = '⌕';
+    find.addEventListener('click', (e) => {
+      e.stopPropagation();
+      isPaletteOpen() ? closePalette() : openPalette();
+    });
+
+    top.append(headCount, find, hand, pin);
 
     modelLine = document.createElement('div');
     modelLine.className = 'cpn-meter';
@@ -1716,7 +1730,7 @@
     paletteList.className = 'cpn-pal-list';
     const hint = document.createElement('div');
     hint.className = 'cpn-pal-hint';
-    hint.textContent = 'Enter to open · Esc to close · this thread first, then everything else';
+    hint.textContent = 'Enter to open · Esc to close · Alt+K to reopen · this thread first, then everything else';
     box.append(paletteInput, paletteList, hint);
     palette.appendChild(box);
 
@@ -1927,9 +1941,22 @@
       else setTimeout(() => syncThreads(false), 3000);
     });
 
+    /*
+     * Alt+K, not Ctrl+K.
+     *
+     * Ctrl+K is claude.ai's own command palette — "Search or start a chat",
+     * with quick actions and recents, and the site prints the shortcut in its
+     * own footer. Binding it here would have swallowed a first-party feature.
+     * Alt+K also matches the Alt+Arrow navigation already in this script.
+     *
+     * The two searches do different jobs: Claude's finds threads by title,
+     * this one finds the questions inside them.
+     */
     window.addEventListener('keydown', (e) => {
-      const combo = (e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'k';
-      if (combo) { e.preventDefault(); isPaletteOpen() ? closePalette() : openPalette(); }
+      if (!e.altKey || e.ctrlKey || e.metaKey) return;
+      if (e.key.toLowerCase() !== 'k') return;
+      e.preventDefault();
+      isPaletteOpen() ? closePalette() : openPalette();
     }, true);
 
     if (CONFIG.hotkeys) {

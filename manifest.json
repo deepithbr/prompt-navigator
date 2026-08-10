@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Prompt Navigator for Claude",
-  "version": "3.3.0",
-  "description": "Jump between your own questions in a Claude chat, see the documents a thread produced, and read your plan usage. Adds a usage meter to ChatGPT too.",
+  "version": "3.4.0",
+  "description": "Jump between your own questions in a Claude chat, search them across every thread, see the documents a thread produced, and read your plan usage. Adds a usage meter to ChatGPT too.",
   "homepage_url": "https://github.com/deepithbr/prompt-navigator",
 
   "content_scripts": [
