@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Prompt Navigator
 // @namespace    local.deepith
-// @version      3.6.2
+// @version      3.6.3
 // @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it falls back to the messages on screen, and lists the files that session produced from its Outputs panel.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -117,10 +117,13 @@
    * header exists to prevent.
    */
   /*
-   * The `right` value here is only the pre-script default. syncRailOffset()
+   * The right value here is only the pre-script default. syncRailOffset()
    * sets it inline from a live measurement, and an inline style beats this
    * rule, so changing the number below on its own does nothing. That is the
    * mistake this comment exists to stop being made twice.
+   *
+   * No backticks in this block. It sits inside a template literal, and a
+   * backtick here ends the stylesheet and breaks the whole script.
    *
    * The offset is the same collapsed and open, deliberately. Sliding the rail
    * to the edge on hover moved the thing you were reaching for while you were
