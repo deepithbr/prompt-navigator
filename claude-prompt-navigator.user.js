@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Prompt Navigator
 // @namespace    local.deepith
-// @version      3.5.0
+// @version      3.6.0
 // @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it falls back to the messages on screen, and lists the files that session produced from its Outputs panel.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -672,6 +672,64 @@
   // Area range cannot be mangled by whatever edits this file next.
   const ICON_GLYPH = new RegExp(
     '[' + String.fromCharCode(0xE000) + '-' + String.fromCharCode(0xF8FF) + ']', 'g');
+
+  /* ------------------------------------------------------------------ *
+   * Opening a file through Claude's own viewer
+   * ------------------------------------------------------------------ *
+   *
+   * Every artifact carries a `View <title>` button, both on its card in the
+   * transcript and in the Artifacts panel. Those buttons stay in the document
+   * whether the panel is open or shut, so nothing has to be opened first.
+   *
+   * The titles are prettified: `C08_Cowork_Handover.md` is listed as
+   * `C08 cowork handover`. Reducing both sides to lowercase alphanumerics
+   * makes them line up. Measured against a thread holding 11 files, all 11
+   * matched a row.
+   */
+  const artifactKey = (s) => (s || '')
+    .toLowerCase()
+    .replace(/\.[a-z0-9]{1,5}$/, '')
+    .replace(/[^a-z0-9]+/g, '');
+
+  function artifactRows() {
+    const rows = new Map();
+    document.querySelectorAll('button[aria-label^="View "]').forEach((el) => {
+      const title = el.getAttribute('aria-label').replace(/^View /, '');
+      if (!title || title === 'all') return;          // "View all" is not a file
+
+      /*
+       * Two files can share a title and differ only by format: an assessment
+       * plan exported as both .pdf and .html reduces to one key. The row's own
+       * subtitle reads "Document · PDF" or "Code · HTML", so the format is
+       * used to tell them apart. Without it, clicking the PDF could open the
+       * HTML, which looks like a bug and is hard to explain.
+       */
+      let box = el;
+      for (let i = 0; i < 5 && box.parentElement; i++) {
+        box = box.parentElement;
+        if ((box.innerText || '').trim()) break;
+      }
+      const fmt = (box.innerText || '').match(/·\s*([A-Za-z0-9]+)\s*$/);
+      const k = artifactKey(title);
+      if (!rows.has(k)) rows.set(k, []);
+      rows.get(k).push({ ext: fmt ? fmt[1].toLowerCase() : null, el });
+    });
+    return rows;
+  }
+
+  /* Returns true only if a row was found and clicked. */
+  function openArtifact(name) {
+    const rows = artifactRows();
+    const candidates = rows.get(artifactKey(name));
+    if (!candidates || !candidates.length) return false;
+
+    const ext = (name.match(/\.([a-z0-9]{1,5})$/i) || [])[1];
+    const exact = ext && candidates.find((c) => c.ext === ext.toLowerCase());
+    const pick = exact || candidates[0];
+    if (!pick.el || !document.body.contains(pick.el)) return false;
+    pick.el.click();
+    return true;
+  }
 
   function coworkOutputs() {
     let node = null;
@@ -1434,11 +1492,12 @@
           row.title = `${d.name}\nProduced by this session. Click to open it.`;
         } else {
           row.title = d.onDisk
-            ? `${d.name}\n${Math.max(1, Math.round(d.size / 1024))} KB, still downloadable`
+            ? `${d.name}\n${Math.max(1, Math.round(d.size / 1024))} KB`
             + `\nCreated after question ${entry.anchor + 1}`
+            + '\nClick to open it'
             : `${d.name}\nCreated after question ${entry.anchor + 1}, but no longer in the `
             + 'sandbox. Claude clears older files, so this one cannot be downloaded again '
-            + 'without regenerating it.';
+            + 'without regenerating it.\nClick to go to the question that made it.';
         }
         const icon = document.createElement('span');
         icon.className = 'cpn-doc-icon';
@@ -1518,16 +1577,24 @@
     const entry = entries[i];
     if (!entry) return;
 
-    // A document has no message of its own to scroll to, so it hands off to
-    // the question it was created after. On cowork there is no anchor, but the
-    // Outputs panel row is a real button, so clicking ours opens the file
-    // through Claude's own preview rather than pretending to scroll somewhere.
+    /*
+     * A row labelled with a filename opens that file. Scrolling to the
+     * question that produced it was the old behaviour and it answered a
+     * question nobody asked: the question rows are already right there if
+     * context is what you wanted.
+     *
+     * The exception is a file the sandbox has cleared. There is nothing to
+     * open, so where it was made is the only useful thing left, and that is
+     * what the hollow marker does. Both are stated in the row's tooltip.
+     */
     if (entry.kind === 'doc') {
+      // Cowork holds its own button, since it has no anchor to fall back to.
       if (entry.anchor == null) {
         const el = entry.doc.el;
         if (el && document.body.contains(el)) el.click();
         return;
       }
+      if (entry.doc.onDisk && openArtifact(entry.doc.name)) return;
       const target = rows.findIndex((r) => r.entry.kind === 'q' && r.entry.qi === entry.anchor);
       if (target !== -1) return jumpTo(target);
       return;

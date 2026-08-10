@@ -13,7 +13,7 @@ Works as a Chrome extension or as two Tampermonkey userscripts. The files are th
 **On `claude.ai`**
 
 - Every question in the thread, numbered, read from Claude's own conversation API rather than the page — the page only ever holds three to five of them at a time
-- Documents Claude wrote, placed after the question that produced them. Solid marker means the file is still downloadable, hollow means it was created and has since been cleared from the sandbox
+- Documents Claude wrote, placed after the question that produced them. A solid marker is a file that still exists, and clicking it opens the file in Claude's own viewer. A hollow one was created and has since been cleared from the sandbox, so there is nothing to open and clicking takes you to the question that made it instead
 - In a Cowork session, every file that session produced, read from its Outputs panel. Click one to open it
 - The model and effort the chat is running, read live, so switching either updates the header
 - Conversation size in tokens, measured
