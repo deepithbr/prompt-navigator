@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Prompt Navigator
 // @namespace    local.deepith
-// @version      3.6.1
+// @version      3.6.2
 // @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it falls back to the messages on screen, and lists the files that session produced from its Outputs panel.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -117,32 +117,27 @@
    * header exists to prevent.
    */
   /*
-   * Collapsed, the rail stands off the right edge rather than sitting on it.
+   * The `right` value here is only the pre-script default. syncRailOffset()
+   * sets it inline from a live measurement, and an inline style beats this
+   * rule, so changing the number below on its own does nothing. That is the
+   * mistake this comment exists to stop being made twice.
    *
-   * Measured on a 1526px viewport: the message scroller ends 8px from the edge
-   * and its scrollbar is 10px wide, so the scrollbar occupies the band from
-   * 8px to 18px. At right: 0 the ticks sat at 6px to 16px and ran straight
-   * through it. 16px of offset plus the 6px padding puts them at 22px, clear
-   * of the band with a few pixels to spare.
-   *
-   * The offset also keeps the rail's hover area off the scrollbar, so reaching
-   * for the scrollbar no longer pops the rail open on the way.
-   *
-   * Open, it returns to the edge. The panel is built to sit flush there, and
-   * its right corners are square for that reason.
+   * The offset is the same collapsed and open, deliberately. Sliding the rail
+   * to the edge on hover moved the thing you were reaching for while you were
+   * reaching for it, and it put the open panel back over the scrollbar. Since
+   * it no longer sits flush, all four corners are rounded.
    */
   .cpn-rail {
-    position: fixed; right: 16px; top: 50%; transform: translateY(-50%);
+    position: fixed; right: 24px; top: 50%; transform: translateY(-50%);
     z-index: 2147483000;
     display: flex; flex-direction: column;
     padding: 8px 6px; max-height: 78vh; overflow: hidden;
     font: 12px/1.35 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
     color: #e6e4df; background: transparent;
-    border-radius: 10px 0 0 10px;
+    border-radius: 10px;
     transition: background 140ms ease, box-shadow 140ms ease, right 140ms ease;
   }
   .cpn-rail:hover, .cpn-rail.cpn-pinned {
-    right: 0;
     background: rgba(32,31,29,0.95);
     box-shadow: 0 4px 24px rgba(0,0,0,0.45);
   }
@@ -239,8 +234,19 @@
     .cpn-bar-fill { background: #5aa6ff; }
     .cpn-bar-mark { background: #111111; }
   }
-  .cpn-pin { cursor: pointer; border: 0; background: none; color: inherit; font-size: 12px; opacity: .7; }
-  .cpn-pin:hover { opacity: 1; }
+  /* 12px glyphs in a text-sized button were hard to hit and harder to read.
+     16px with a padded box gives them a 24px target without widening the
+     header, since the row has spare height already. */
+  .cpn-pin {
+    cursor: pointer; border: 0; background: none; color: inherit;
+    font-size: 16px; line-height: 1; opacity: .7;
+    padding: 3px 4px; margin: -3px 0; border-radius: 5px;
+    transition: opacity 120ms ease, background 120ms ease;
+  }
+  .cpn-pin:hover { opacity: 1; background: rgba(255,255,255,0.08); }
+  @media (prefers-color-scheme: light) {
+    .cpn-pin:hover { background: rgba(0,0,0,0.07); }
+  }
 
   /* Collapsed, this is a tick strip and nothing else, so it is kept tight:
      18px wide and 3px between rows. On a 45 row thread that is roughly 225px
@@ -287,11 +293,7 @@
    * suspended for as long as the panel is open, leaving the tick strip, and
    * hovering still opens it deliberately.
    */
-  /* Pinned but suspended renders as the tick strip, so it takes the strip's
-     offset too rather than staying pinned to the edge. */
-  .cpn-rail.cpn-panelled.cpn-pinned:not(:hover) {
-    right: 16px; background: transparent; box-shadow: none;
-  }
+  .cpn-rail.cpn-panelled.cpn-pinned:not(:hover) { background: transparent; box-shadow: none; }
   .cpn-rail.cpn-panelled.cpn-pinned:not(:hover) .cpn-head {
     opacity: 0; height: 0; min-width: 0;
     padding: 0; margin: 0; border-bottom: 0;
@@ -847,12 +849,47 @@
     return Math.max(0, Math.round(vw - edge));
   }
 
+  /*
+   * How far in the rail sits when no panel is open.
+   *
+   * It used to be zero, which put the ticks straight through Claude's own
+   * scrollbar. Rather than hardcode a clearance that only holds at one window
+   * size and zoom level, this measures the scrollbar: where the message
+   * scroller's right edge is, and how wide its scrollbar is. On a 1526px
+   * viewport that band runs from 18px to 8px in from the edge.
+   *
+   * The clamp covers the case where the scroller cannot be found at all, or
+   * where an overlay scrollbar reports zero width.
+   */
+  const EDGE_AIR = 14;
+  let gapCache = { vw: -1, px: 0 };
+
+  function edgeGap() {
+    const vw = window.innerWidth;
+    // syncRailOffset runs on every DOM mutation and scroller() walks the
+    // document, so this is measured once per window width and then reused.
+    if (gapCache.vw === vw) return gapCache.px;
+    let band = 18, measured = false;
+    const sc = scroller();
+    if (sc) {
+      const r = sc.getBoundingClientRect();
+      const bar = sc.offsetWidth - sc.clientWidth;
+      const px = Math.round(vw - (r.right - bar));
+      if (px >= 0 && px < 60) { band = px; measured = true; }
+    }
+    const gap = Math.min(48, Math.max(20, band + EDGE_AIR));
+    // Only a real measurement is cached. At boot the scroller may not exist
+    // yet, and caching the fallback would freeze it in place for the session.
+    if (measured) gapCache = { vw, px: gap };
+    return gap;
+  }
+
   let lastOffset = -1;
   function syncRailOffset() {
     if (!rail || !document.body.contains(rail)) return;
     const raw = panelOffset();
     // A few pixels of air so the ticks do not touch the panel edge.
-    const offset = raw > 0 ? raw + 6 : 0;
+    const offset = raw > 0 ? raw + 6 : edgeGap();
     rail.classList.toggle('cpn-panelled', raw > 0);
     if (offset === lastOffset) return;
     lastOffset = offset;
