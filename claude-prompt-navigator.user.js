@@ -1,0 +1,1478 @@
+// ==UserScript==
+// @name         Claude Prompt Navigator
+// @namespace    local.deepith
+// @version      3.3.0
+// @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it falls back to listing the messages currently on screen.
+// @author       deepith
+// @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
+//               see LICENSE. Not open source, not for redistribution.
+// @match        https://claude.ai/*
+// @run-at       document-start
+// @grant        none
+// ==/UserScript==
+
+/*
+ * Why v2 exists
+ * -------------
+ * v1 scraped [data-testid="user-message"] out of the DOM. That only ever
+ * finds 3 to 5 questions, because claude.ai virtualises the message list:
+ * everything outside the current window is replaced by one tall spacer div
+ * and is genuinely absent from the document. Programmatic scrolling moves
+ * the scrollbar but does not remount those messages, so no amount of
+ * scrolling from script can recover them.
+ *
+ * v2 therefore builds the list from the same endpoint the app itself uses,
+ * which returns the whole conversation at once. The DOM is still consulted,
+ * but only to work out which questions happen to be on screen right now.
+ *
+ * Consequence worth knowing: clicking a question that is currently loaded
+ * scrolls to it exactly. Clicking one from a part of the chat Claude has
+ * unloaded moves you to roughly the right place and shows you the full
+ * question text, because an exact scroll target does not exist in the page.
+ */
+
+(function () {
+  'use strict';
+
+  const CONFIG = {
+    labelChars: 80,        // characters of each question shown in the list
+    hotkeys: true,         // Alt+ArrowUp / Alt+ArrowDown
+    flashMs: 1500,         // how long a jumped-to message stays outlined
+    settleMs: 260,         // gap between checks after an approximate scroll
+    settleTries: 6,        // how many times to check before giving up
+    refetchMs: 1600,       // delay before refetching after you send a message
+
+    // How long Anthropic keeps a conversation prompt-cached. This is an
+    // assumption, not something the page reports. Anthropic runs both a five
+    // minute and a one hour cache window and the browser cannot see which
+    // applies, so claude-counter's hardcoded 5 is a guess like this one, and
+    // is the likeliest reason its countdown reads wrong. Change it here if
+    // yours behaves differently.
+    cacheWindowMinutes: 5,
+
+    // Fallback denominator for the context bar, used only when the chat runs a
+    // model missing from CONTEXT_WINDOWS below. Deliberately the small, older
+    // figure: an over-full bar makes you start a new chat sooner than needed,
+    // which is the harmless direction to be wrong in.
+    contextLimitTokens: 200000,
+  };
+
+  /*
+   * Context window per model.
+   *
+   * The bar used to divide by a hardcoded 200,000, which claude-counter also
+   * does. That is wrong by five times for every chat on this account: both
+   * claude-opus-5 and claude-fable-5 carry a 1M window, so a thread reading
+   * 9 per cent full was actually nearer 2.
+   *
+   * Figures are the documented API context windows. Whether claude.ai applies
+   * its own tighter ceiling on top is not something the page reports, so treat
+   * the denominator as the model's capability rather than a promise. (inference)
+   */
+  const CONTEXT_WINDOWS = {
+    'claude-fable-5': 1000000,
+    'claude-mythos-5': 1000000,
+    'claude-opus-5': 1000000,
+    'claude-opus-4-8': 1000000,
+    'claude-opus-4-7': 1000000,
+    'claude-opus-4-6': 1000000,
+    'claude-sonnet-5': 1000000,
+    'claude-sonnet-4-6': 1000000,
+    'claude-haiku-4-5': 200000,
+  };
+
+  /* Short names, so the header reads as a label rather than an id. */
+  const MODEL_LABELS = {
+    'claude-fable-5': 'Fable 5',
+    'claude-mythos-5': 'Mythos 5',
+    'claude-opus-5': 'Opus 5',
+    'claude-opus-4-8': 'Opus 4.8',
+    'claude-opus-4-7': 'Opus 4.7',
+    'claude-opus-4-6': 'Opus 4.6',
+    'claude-sonnet-5': 'Sonnet 5',
+    'claude-sonnet-4-6': 'Sonnet 4.6',
+    'claude-haiku-4-5': 'Haiku 4.5',
+  };
+
+  // Verified live against claude.ai on 9 Aug 2026. Left first in the list.
+  const MESSAGE_SELECTORS = [
+    '[data-testid="user-message"]',
+    'div.font-user-message',
+    '[class*="font-user-message"]',
+  ];
+
+  const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const KEYLEN = 34;
+  const keyOf = (s) => norm(s).slice(0, KEYLEN).toLowerCase();
+
+  /* ------------------------------------------------------------------ *
+   * Styles
+   * ------------------------------------------------------------------ */
+  const CSS = `
+  /*
+   * The rail itself never scrolls. It is a flex column holding a header that
+   * stays put and a list that scrolls underneath it. Scrolling the whole rail
+   * carried the header off the top of a long list, which is the one thing the
+   * header exists to prevent.
+   */
+  .cpn-rail {
+    position: fixed; right: 0; top: 50%; transform: translateY(-50%);
+    z-index: 2147483000;
+    display: flex; flex-direction: column;
+    padding: 8px 6px; max-height: 78vh; overflow: hidden;
+    font: 12px/1.35 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: #e6e4df; background: transparent;
+    border-radius: 10px 0 0 10px;
+    transition: background 140ms ease, box-shadow 140ms ease;
+  }
+  .cpn-rail:hover, .cpn-rail.cpn-pinned {
+    background: rgba(32,31,29,0.95);
+    box-shadow: 0 4px 24px rgba(0,0,0,0.45);
+  }
+
+  .cpn-list {
+    display: flex; flex-direction: column; gap: 3px;
+    overflow-y: auto; overflow-x: hidden;
+    min-height: 0;   /* without this the flex child refuses to shrink */
+    scrollbar-width: none;
+  }
+  /* Collapsed, the rail is only about 22px wide, so a scrollbar would eat the
+     tick column. It appears once the rail is open. */
+  .cpn-list::-webkit-scrollbar { width: 0; }
+  .cpn-rail:hover .cpn-list, .cpn-rail.cpn-pinned .cpn-list { scrollbar-width: thin; }
+  .cpn-rail:hover .cpn-list::-webkit-scrollbar,
+  .cpn-rail.cpn-pinned .cpn-list::-webkit-scrollbar { width: 6px; }
+  .cpn-list::-webkit-scrollbar-thumb { background: #5a5750; border-radius: 3px; }
+
+  @media (prefers-color-scheme: light) {
+    .cpn-rail { color: #2b2924; }
+    .cpn-rail:hover, .cpn-rail.cpn-pinned { background: rgba(252,251,249,0.97); }
+    .cpn-list::-webkit-scrollbar-thumb { background: #c4c0b8; }
+  }
+
+  /*
+   * width: 0 matters as much as height: 0 here.
+   *
+   * Once the header gained meter rows with fixed 80px and 54px columns, its
+   * intrinsic width became about 202px. A zero-height header still contributed
+   * that width to the flex column, so the collapsed rail was 214px wide rather
+   * than 18px — which is why it sat on top of the conversation whether or not
+   * a panel was open. Collapsing both axes fixes it.
+   */
+  .cpn-head {
+    flex: 0 0 auto;
+    display: flex; flex-direction: column; align-items: stretch; gap: 3px;
+    opacity: 0; height: 0; width: 0; min-width: 0; overflow: hidden;
+  }
+  .cpn-rail:hover .cpn-head, .cpn-rail.cpn-pinned .cpn-head {
+    /* Only when open. A min-width on the collapsed header would widen the
+       whole rail and destroy the 22px tick strip. */
+    opacity: 1; height: auto; width: auto; min-width: 210px;
+    padding-bottom: 6px; margin-bottom: 6px;
+    border-bottom: 1px solid rgba(140,135,125,0.22);
+  }
+  .cpn-head-top {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    font-size: 11px; letter-spacing: .04em; text-transform: uppercase; opacity: .55;
+  }
+  /* text-transform and text-align are stated because claude.ai's own rules
+     otherwise reach in and uppercase and centre these lines. */
+  .cpn-meter {
+    font-size: 10.5px; opacity: .6; white-space: nowrap; cursor: default;
+    text-transform: none; text-align: left; letter-spacing: 0;
+  }
+  .cpn-meter.cpn-warn { color: #d97757; opacity: .95; }
+
+  /* A labelled track with a marker at the fill edge, so the position reads at
+     a glance rather than having to be parsed out of a number. */
+  .cpn-row {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 10.5px; text-transform: none; letter-spacing: 0; cursor: default;
+  }
+  /* Fixed columns on both sides so the three bars start and end on the same
+     x, instead of jittering with the width of "Context" vs "Session". */
+  .cpn-row-label {
+    flex: 0 0 80px; opacity: .65; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .cpn-row-right {
+    flex: 0 0 54px; opacity: .4; white-space: nowrap; text-align: right;
+  }
+  .cpn-bar {
+    position: relative; flex: 1 1 auto; min-width: 56px; height: 9px;
+    border: 1px solid #787877; border-radius: 5px; overflow: hidden;
+  }
+  .cpn-bar-fill {
+    position: absolute; top: 0; bottom: 0; left: 0; width: 0;
+    background: #2c84db; transition: width 220ms ease;
+  }
+  /* The marker is the clock, not the fill. It shows how far through the reset
+     window you are, so its distance from the fill edge is the useful reading:
+     fill behind the marker means you are pacing under the limit, fill ahead of
+     it means you will run out before the window resets. */
+  .cpn-bar-mark {
+    position: absolute; top: 0; bottom: 0; width: 2px; left: 0;
+    background: #ffffff; transform: translateX(-1px); transition: left 220ms ease;
+  }
+  .cpn-bar-mark.cpn-hidden { display: none; }
+  .cpn-row.cpn-warn .cpn-bar-fill { background: #d97757; }
+  .cpn-row.cpn-warn .cpn-row-label { color: #d97757; opacity: .95; }
+  @media (prefers-color-scheme: light) {
+    .cpn-bar { border-color: #bfbfbf; }
+    .cpn-bar-fill { background: #5aa6ff; }
+    .cpn-bar-mark { background: #111111; }
+  }
+  .cpn-pin { cursor: pointer; border: 0; background: none; color: inherit; font-size: 12px; opacity: .7; }
+  .cpn-pin:hover { opacity: 1; }
+
+  /* Collapsed, this is a tick strip and nothing else, so it is kept tight:
+     18px wide and 3px between rows. On a 45 row thread that is roughly 225px
+     of height instead of 315px. */
+  .cpn-item {
+    display: flex; align-items: center; gap: 8px;
+    cursor: pointer; border-radius: 5px; padding: 1px 3px;
+    max-width: 18px; transition: max-width 160ms ease, background 120ms ease;
+  }
+  .cpn-rail:hover .cpn-item, .cpn-rail.cpn-pinned .cpn-item { max-width: 360px; }
+  .cpn-item:hover { background: rgba(140,135,125,0.18); }
+
+  .cpn-tick {
+    flex: 0 0 auto; height: 2px; width: 12px; border-radius: 2px;
+    background: #8a857b; opacity: .5;
+    transition: opacity 120ms, background 120ms, width 120ms;
+  }
+  /* solid tick = that message is loaded in the page and jumps exactly */
+  .cpn-item.cpn-loaded .cpn-tick { opacity: .85; }
+  .cpn-item:hover .cpn-tick { opacity: 1; width: 15px; }
+  .cpn-item.cpn-active .cpn-tick { background: #d97757; opacity: 1; width: 17px; }
+
+  .cpn-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0; transition: opacity 120ms ease; }
+  .cpn-rail:hover .cpn-label, .cpn-rail.cpn-pinned .cpn-label { opacity: .92; }
+  .cpn-item.cpn-active .cpn-label { color: #d97757; }
+  .cpn-num { opacity: .45; margin-right: 5px; font-variant-numeric: tabular-nums; }
+
+  /* Documents Claude created, marked distinctly from your questions. */
+  .cpn-item.cpn-doc .cpn-tick { background: #5b9dbb; width: 7px; margin-left: 5px; opacity: .8; }
+  .cpn-item.cpn-doc:hover .cpn-tick { width: 10px; opacity: 1; }
+  .cpn-item.cpn-doc .cpn-label { opacity: 0; font-size: 11.5px; }
+  .cpn-rail:hover .cpn-doc .cpn-label, .cpn-rail.cpn-pinned .cpn-doc .cpn-label { opacity: .72; }
+  .cpn-doc-icon { color: #5b9dbb; margin-right: 5px; }
+  /* Hollow marker: created in this chat, but the sandbox no longer holds it. */
+  .cpn-item.cpn-gone .cpn-tick { background: transparent; box-shadow: inset 0 0 0 1px #5b9dbb; height: 4px; }
+  .cpn-item.cpn-gone .cpn-label { font-style: italic; }
+  .cpn-rail:hover .cpn-gone .cpn-label, .cpn-rail.cpn-pinned .cpn-gone .cpn-label { opacity: .55; }
+
+  /*
+   * While a right-hand panel is open there is no room for the open rail.
+   * Measured with the Artifacts panel showing: the message column ends at 910
+   * and the panel starts at 1118, a 208px gutter, while a pinned rail is 218px
+   * wide — so a pinned rail sat on top of the download buttons. Pinning is
+   * suspended for as long as the panel is open, leaving the tick strip, and
+   * hovering still opens it deliberately.
+   */
+  .cpn-rail.cpn-panelled.cpn-pinned:not(:hover) { background: transparent; box-shadow: none; }
+  .cpn-rail.cpn-panelled.cpn-pinned:not(:hover) .cpn-head {
+    opacity: 0; height: 0; min-width: 0;
+    padding: 0; margin: 0; border-bottom: 0;
+  }
+  .cpn-rail.cpn-panelled.cpn-pinned:not(:hover) .cpn-item { max-width: 18px; }
+  .cpn-rail.cpn-panelled.cpn-pinned:not(:hover) .cpn-label { opacity: 0; }
+
+  .cpn-flash { outline: 2px solid #d97757 !important; outline-offset: 4px; border-radius: 8px; transition: outline-color 600ms ease; }
+  .cpn-flash-out { outline-color: transparent !important; }
+
+  .cpn-peek {
+    position: fixed; right: 400px; z-index: 2147483001;
+    max-width: 420px; padding: 12px 14px;
+    background: rgba(32,31,29,0.98); color: #e6e4df;
+    border: 1px solid rgba(140,135,125,0.3); border-radius: 8px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    font: 13px/1.5 ui-sans-serif, system-ui, sans-serif;
+    white-space: pre-wrap;
+  }
+  @media (prefers-color-scheme: light) {
+    .cpn-peek { background: rgba(252,251,249,0.99); color: #2b2924; }
+  }
+  .cpn-peek-note { margin-top: 9px; font-size: 11px; opacity: .6; }
+  `;
+
+  function injectStyles() {
+    try {
+      const s = new CSSStyleSheet();
+      s.replaceSync(CSS);
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, s];
+      return;
+    } catch (e) { /* fall through */ }
+    const t = document.createElement('style');
+    t.textContent = CSS;
+    (document.head || document.documentElement).appendChild(t);
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Claude's own conversation API
+   * ------------------------------------------------------------------ */
+  let orgIds = null;
+  let resolvedOrg = null;   // the org that actually owned the last conversation
+
+  // Two surfaces, two data sources. Ordinary chats are served by the
+  // conversation API and give the complete list. Cowork sessions are not:
+  // their transcript is an agent event log at /v1/code/sessions/<id>/events,
+  // which costs about 14 MB and 6 seconds to page through for one session,
+  // and buries typed prompts among tool results, skill injections and
+  // base64 screenshots. Not worth it, so Cowork reads the page instead and
+  // says plainly that it is only showing what is on screen.
+  function route() {
+    const chat = location.pathname.match(/\/chat\/([0-9a-f-]{36})/i);
+    if (chat) return { mode: 'chat', id: chat[1] };
+    const cowork = location.pathname.match(/\/cowork\/(cse_[A-Za-z0-9]+)/);
+    if (cowork) return { mode: 'cowork', id: cowork[1] };
+    return null;
+  }
+
+  async function getOrgIds() {
+    if (orgIds) return orgIds;
+    const cached = localStorage.getItem('cpn-orgs');
+    if (cached) { try { orgIds = JSON.parse(cached); return orgIds; } catch (e) {} }
+    const r = await fetch('/api/organizations', { headers: { accept: 'application/json' } });
+    orgIds = (await r.json()).map((o) => o.uuid);
+    localStorage.setItem('cpn-orgs', JSON.stringify(orgIds));
+    return orgIds;
+  }
+
+  function textOfMessage(m) {
+    const direct = norm(m.text);
+    if (direct) return direct;
+    return norm((m.content || []).map((c) => c.text || '').join(' '));
+  }
+
+  async function fetchQuestions(convId) {
+    const orgs = await getOrgIds();
+    for (const org of orgs) {
+      const url = `/api/organizations/${org}/chat_conversations/${convId}`
+        + '?tree=True&rendering_mode=messages';
+      let res;
+      try { res = await fetch(url, { headers: { accept: 'application/json' } }); }
+      catch (e) { continue; }
+      if (!res.ok) continue;
+      resolvedOrg = org;
+      const data = await res.json();
+      projectUuid = data.project_uuid || null;
+      convModel = data.model || null;
+      convEffort = (data.settings && data.settings.effort_level) || null;
+
+      /*
+       * Only the live branch counts.
+       *
+       * tree=True returns every message including ones you edited away, and
+       * those are not in Claude's context any more. Walking back from
+       * current_leaf_message_uuid through parent_message_uuid gives the branch
+       * actually in play. On one thread checked here that was 42 messages out
+       * of 44 in the tree. Without this the rail also listed questions you had
+       * already replaced.
+       */
+      const everything = data.chat_messages || [];
+      const byId = new Map(everything.map((m) => [m.uuid, m]));
+      let msgs = [];
+      let cur = byId.get(data.current_leaf_message_uuid);
+      const walked = new Set();
+      while (cur && !walked.has(cur.uuid)) {
+        walked.add(cur.uuid);
+        msgs.push(cur);
+        cur = byId.get(cur.parent_message_uuid);
+      }
+      msgs.reverse();
+      // If the leaf could not be resolved, fall back to the whole tree rather
+      // than showing an empty rail.
+      if (!msgs.length) msgs = everything.slice();
+      msgs.sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+      /*
+       * Size the conversation from content blocks, counting text and the
+       * readable part of attachments while skipping thinking.
+       *
+       * Skipping thinking is the correction. Measuring the raw message text
+       * counted it, which on the thread this was tested against was 67,593
+       * characters of thinking against 69,849 of actual reply, very nearly
+       * doubling the figure. Thinking from earlier turns is not resent, so
+       * counting it overstated the number by about half. claude-counter
+       * excludes it too, and is right to.
+       *
+       * It also counts tool_use and tool_result payloads. Worth knowing that
+       * this endpoint never returns those blocks: six conversations checked
+       * here came back with text and thinking only, so that part of its logic
+       * yields nothing in practice and there is nothing for us to match.
+       */
+      convChars = msgs.reduce((total, m) => {
+        let c = 0;
+        (m.content || []).forEach((b) => {
+          if (b.type === 'text' && typeof b.text === 'string') c += b.text.length;
+        });
+        (m.attachments || []).forEach((a) => {
+          if (typeof a.extracted_content === 'string') c += a.extracted_content.length;
+        });
+        return total + c;
+      }, 0);
+
+      const humans = msgs.filter((m) => m.sender === 'human');
+      return humans.map((m, i) => {
+        const text = textOfMessage(m);
+        const hasFiles = (m.attachments || []).length || (m.files || []).length;
+        return {
+          n: i + 1,
+          uuid: m.uuid,
+          text: text || (hasFiles ? '(attachment only)' : '(empty message)'),
+          key: keyOf(text),
+          at: Date.parse(m.created_at) || 0,
+          mi: m.index ?? 0,
+        };
+      });
+    }
+    throw new Error('conversation fetch failed for every organization');
+  }
+
+  /*
+   * Documents Claude produced during the conversation.
+   *
+   * The obvious source is the sandbox listing, and on its own it is wrong.
+   * The sandbox is not permanent: files made early in a long thread get
+   * evicted, so the listing shows only whatever still happens to exist.
+   * Measured on a 27 question thread, it reported 11 files while the
+   * conversation had actually produced 18. Everything from the first day,
+   * including an xlsx and three docx files, had already gone.
+   *
+   * So two sources get merged. The listing is authoritative for files that
+   * still exist and gives exact sizes and timestamps. The message text
+   * recovers the ones that no longer do, and places them better besides,
+   * because a filename first appearing in an assistant message pins the
+   * document to that message rather than to a clock reading.
+   *
+   * Files you uploaded are excluded, as are a few conventional filenames
+   * that get discussed constantly and created rarely.
+   */
+  const DENY = new Set([
+    'skill.md', 'style.md', 'claude.md', 'agents.md', 'readme.md',
+    'package.json', 'tsconfig.json', 'state.md', 'memory.md',
+  ]);
+
+  // Widened to match what the sandbox filter accepts. It was narrower to keep
+  // code samples out of the list, but that also dropped real deliverables —
+  // a build script or a json export is still something Claude made for you.
+  // The denylist above is what keeps the noise down now.
+  const TEXT_FILE_RE = new RegExp(
+    '\\b[A-Za-z0-9][\\w.\\-]{1,70}\\.'
+    + '(?:pdf|docx?|xlsx?|pptx?|html?|xml|csv|md|markdown|zip|txt|json|js|ts|py|css|svg|ya?ml)'
+    + '\\b', 'g');
+
+  async function listOutputFiles(convId) {
+    const url = `/api/organizations/${resolvedOrg}/conversations/${convId}`
+      + '/wiggle/list-files?prefix=';
+    let res;
+    try { res = await fetch(url, { headers: { accept: 'application/json' } }); }
+    catch (e) { return { outputs: [], uploads: new Set() }; }
+    if (!res.ok) return { outputs: [], uploads: new Set() };
+    const meta = (await res.json()).files_metadata || [];
+    const nameOf = (f) => f.path.split('/').pop();
+    /*
+     * Documents Claude wrote also went through the context window, and they
+     * are often the bigger half. On the thread this was measured against, the
+     * outputs came to 105,631 characters against 69,605 of conversation, which
+     * moved the estimate from 18k to 46k.
+     *
+     * Only text-shaped outputs are counted. A pdf or docx is a rendering of
+     * something already counted, usually the html or markdown sitting beside
+     * it in the same folder, and its byte size says nothing about tokens. On
+     * that thread the four skipped binaries were exactly the pdf, docx and zip
+     * renders of html files already in the total.
+     */
+    const TEXTY = /\.(md|markdown|txt|html?|xml|csv|json|js|css|ts|py|svg|ya?ml)$/i;
+    const outs = meta.filter((f) => f.path && f.path.includes('/outputs/'));
+    docChars = outs.reduce((n, f) => (
+      (TEXTY.test(f.path) || /^text\//.test(f.content_type || ''))
+        ? n + (f.size || 0)
+        : n
+    ), 0);
+
+    return {
+      outputs: outs.map((f) => ({
+        name: nameOf(f),
+        size: f.size || 0,
+        at: Date.parse(f.created_at) || 0,
+        onDisk: true,
+        msgIndex: null,
+      })),
+      uploads: new Set(meta.filter((f) => f.path && f.path.includes('/uploads/'))
+        .map((f) => nameOf(f).toLowerCase())),
+    };
+  }
+
+  async function scanMentions(convId, uploads) {
+    const url = `/api/organizations/${resolvedOrg}/chat_conversations/${convId}`
+      + '?tree=True&rendering_mode=raw';
+    let res;
+    try { res = await fetch(url, { headers: { accept: 'application/json' } }); }
+    catch (e) { return new Map(); }
+    if (!res.ok) return new Map();
+    const msgs = ((await res.json()).chat_messages || []).slice()
+      .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+
+    // Fallback only. If content blocks were unavailable the conversation went
+    // unmeasured, and raw text beats showing nothing, even though it counts
+    // thinking and so overstates.
+    if (!convChars) convChars = msgs.reduce((n, m) => n + ((m.text || '').length), 0);
+
+    /*
+     * A filename you typed is not evidence Claude did not make it.
+     *
+     * This used to discard any name that had appeared in one of your messages
+     * first. That is exactly backwards for the common case: you ask for
+     * "BCom_Curriculum_Final.docx", Claude writes it, and the file then never
+     * appears in the rail. Only files genuinely present under /uploads/ are
+     * yours, and those are already excluded by the uploads set.
+     */
+    const first = new Map();
+    msgs.forEach((m) => {
+      if (m.sender !== 'assistant') return;
+      const names = [...new Set((m.text || '').match(TEXT_FILE_RE) || [])];
+      names.forEach((n) => {
+        const k = n.toLowerCase();
+        if (first.has(k) || uploads.has(k) || DENY.has(k)) return;
+        first.set(k, {
+          name: n,
+          size: 0,
+          at: Date.parse(m.created_at) || 0,
+          onDisk: false,
+          msgIndex: m.index ?? null,
+        });
+      });
+    });
+    return first;
+  }
+
+  /* Counts only, from the 5 KB project object. The docs themselves are a
+     1.4 MB download and are not worth fetching just to caption a tooltip. */
+  async function fetchProjectInfo() {
+    projectInfo = null;
+    if (!resolvedOrg || !projectUuid) return;
+    try {
+      const r = await fetch(`/api/organizations/${resolvedOrg}/projects/${projectUuid}`,
+        { headers: { accept: 'application/json' } });
+      if (!r.ok) return;
+      const p = await r.json();
+      projectInfo = { docs_count: p.docs_count ?? 0, files_count: p.files_count ?? 0 };
+    } catch (e) { /* tooltip detail only, never worth failing over */ }
+  }
+
+  async function fetchDocuments(convId) {
+    docChars = 0;
+    if (!resolvedOrg) return [];
+    const { outputs, uploads } = await listOutputFiles(convId);
+    const mentions = await scanMentions(convId, uploads);
+
+    const merged = new Map();
+    mentions.forEach((v, k) => merged.set(k, v));
+    outputs.forEach((f) => {
+      const k = f.name.toLowerCase();
+      const hit = merged.get(k);
+      // Keep the message anchor from the text scan, take size and disk state
+      // from the listing.
+      if (hit) { hit.onDisk = true; hit.size = f.size; }
+      else merged.set(k, f);
+    });
+    return [...merged.values()].sort((a, b) => (a.at || 0) - (b.at || 0));
+  }
+
+  /*
+   * Interleaves documents into the question list. A document that was traced
+   * to a message sits after the last question preceding that message, which
+   * is exact. One known only from the sandbox falls back to its timestamp.
+   */
+  function buildEntries(qs, docs) {
+    if (!qs.length) return [];
+    if (!docs.length) return qs.map((q, i) => ({ kind: 'q', q, qi: i }));
+
+    const anchorFor = (d) => {
+      let a = -1;
+      qs.forEach((q, i) => {
+        const before = d.msgIndex != null ? (q.mi < d.msgIndex) : (q.at <= d.at);
+        if (before) a = i;
+      });
+      return a === -1 ? 0 : a;
+    };
+
+    const byAnchor = new Map();
+    docs.forEach((d) => {
+      const a = anchorFor(d);
+      if (!byAnchor.has(a)) byAnchor.set(a, []);
+      byAnchor.get(a).push(d);
+    });
+
+    const out = [];
+    qs.forEach((q, i) => {
+      out.push({ kind: 'q', q, qi: i });
+      (byAnchor.get(i) || []).forEach((d) => out.push({ kind: 'doc', doc: d, anchor: i }));
+    });
+    return out;
+  }
+
+  // Used only when the API is unreachable.
+  function questionsFromDom() {
+    for (const sel of MESSAGE_SELECTORS) {
+      let nodes;
+      try { nodes = [...document.querySelectorAll(sel)]; } catch (e) { continue; }
+      nodes = nodes.filter((n) => !nodes.some((o) => o !== n && o.contains(n)));
+      if (nodes.length) {
+        return nodes.map((el, i) => {
+          const text = norm(el.innerText || el.textContent);
+          return { n: i + 1, uuid: null, text, key: keyOf(text) };
+        });
+      }
+    }
+    return [];
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Matching a question to whatever is on screen right now
+   * ------------------------------------------------------------------ */
+  function mountedNodes() {
+    for (const sel of MESSAGE_SELECTORS) {
+      let nodes;
+      try { nodes = [...document.querySelectorAll(sel)]; } catch (e) { continue; }
+      nodes = nodes.filter((n) => !nodes.some((o) => o !== n && o.contains(n)));
+      if (nodes.length) return nodes;
+    }
+    return [];
+  }
+
+  function nodeFor(item, nodes) {
+    if (!item.key) return null;
+    return nodes.find((el) => {
+      const k = keyOf(el.innerText || el.textContent);
+      return k && (k === item.key || k.startsWith(item.key) || item.key.startsWith(k));
+    }) || null;
+  }
+
+  /*
+   * Step aside when claude.ai opens a right-hand panel.
+   *
+   * Opening the files panel, an artifact, or a preview docks a panel against
+   * the right edge and the rail sits on top of it. Rather than guessing at a
+   * class name that will be renamed, this looks for the geometry: a tall block
+   * flush with the right edge that starts well inside the viewport. Measured
+   * on the files panel it found exactly one candidate, 400px wide, and the
+   * rail moves out by that width.
+   */
+  function panelOffset() {
+    const vw = window.innerWidth, vh = window.innerHeight;
+    let edge = vw;
+    const nodes = document.querySelectorAll('div,aside,section');
+    for (const el of nodes) {
+      if (el === rail || (rail && rail.contains(el)) || el === peek) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 200 || r.width > vw * 0.8) continue;
+      if (r.height < vh * 0.35) continue;
+      if (Math.abs(r.right - vw) > 10) continue;
+      if (r.left <= vw * 0.15) continue;
+      if (r.left < edge) edge = r.left;
+    }
+    return Math.max(0, Math.round(vw - edge));
+  }
+
+  let lastOffset = -1;
+  function syncRailOffset() {
+    if (!rail || !document.body.contains(rail)) return;
+    const raw = panelOffset();
+    // A few pixels of air so the ticks do not touch the panel edge.
+    const offset = raw > 0 ? raw + 6 : 0;
+    rail.classList.toggle('cpn-panelled', raw > 0);
+    if (offset === lastOffset) return;
+    lastOffset = offset;
+    rail.style.right = offset + 'px';
+    // Keep the peek card clear of both the rail and the panel.
+    if (peek) peek.style.right = (offset + 400) + 'px';
+  }
+
+  function scroller() {
+    const cands = [...document.querySelectorAll('div')].filter((e) => {
+      if (e.scrollHeight <= e.clientHeight + 60) return false;
+      const oy = getComputedStyle(e).overflowY;
+      return oy === 'auto' || oy === 'scroll';
+    });
+    return cands.sort((a, b) => b.scrollHeight - a.scrollHeight)[0] || null;
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Size of the conversation, and how much of your plan you have used
+   * ------------------------------------------------------------------ *
+   *
+   * Read this before trusting the number, because one of these two is a
+   * measurement and the other is not.
+   *
+   * The session and weekly percentages are real. They come straight from
+   * /api/organizations/<org>/usage, which is the same source the app uses for
+   * the bars above the composer, and they are the limits that actually stop
+   * you working.
+   *
+   * The token figure is an estimate of this conversation only, at roughly
+   * 3.8 characters per token. Claude exposes no per-conversation context
+   * measurement anywhere, so there is nothing better to read. Deliberately
+   * shown as an absolute number and never as a percentage of a context
+   * window, because the real context also carries your system prompt, your
+   * skills, every enabled tool definition, and project knowledge. On the
+   * thread this was built against, the conversation measured about 36k
+   * tokens while the project behind it held 35 files worth roughly 350k,
+   * which Claude retrieves from rather than loading whole. Any percentage
+   * built on the conversation alone would read comfortably low at exactly
+   * the moment you were in trouble. Watch it climb across a thread and learn
+   * your own threshold instead.
+   */
+  let convChars = 0;
+  let usage = null;
+  let usageAt = 0;
+  let liveLimits = null;      // exact figures pushed down the reply stream
+  let docChars = 0;           // text-shaped documents Claude wrote in this chat
+  let projectUuid = null;
+  let convModel = null;      // drives the context bar's denominator
+  let convEffort = null;     // high / xhigh / max, drives how fast plan usage burns
+  let projectInfo = null;     // counts only, the cheap end of the project API
+
+  const fmtTokens = (n) => {
+    if (n >= 1000000) return Math.round(n / 1000000) + 'M';   // 1M windows
+    if (n >= 1000) return Math.round(n / 1000) + 'k';
+    return String(n);
+  };
+
+  /* ------------------------------------------------------------------ *
+   * Reading the exact limits out of the reply stream
+   * ------------------------------------------------------------------ *
+   *
+   * /usage returns percentages already rounded to whole numbers. Claude also
+   * pushes a message_limit event down the SSE stream while it replies, and
+   * that one carries the raw fraction, so the figure is both exact and
+   * arrives the instant a reply finishes rather than on the next poll.
+   *
+   * The shape of that event could not be verified here, because confirming it
+   * means sending a message on the account and that is not mine to do. So
+   * this hunts for the key anywhere in the payload instead of assuming a
+   * path, accepts either a 0 to 1 fraction or a 0 to 100 percentage, and
+   * logs the shape once so it can be tightened later. If it never matches,
+   * nothing breaks and the polled figures stand.
+   */
+  let loggedLimitShape = false;
+
+  function findMessageLimit(obj, depth) {
+    if (!obj || typeof obj !== 'object' || (depth || 0) > 6) return null;
+    if (obj.message_limit && typeof obj.message_limit === 'object') return obj.message_limit;
+    for (const k of Object.keys(obj)) {
+      const hit = findMessageLimit(obj[k], (depth || 0) + 1);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  function asPercent(v) {
+    if (typeof v !== 'number' || !isFinite(v) || v < 0) return null;
+    return v <= 1 ? v * 100 : v;   // 1.0 reads as full, which is the safe way round
+  }
+
+  function applyLiveLimits(payload) {
+    const ml = findMessageLimit(payload, 0);
+    if (!ml) return;
+    if (!loggedLimitShape) {
+      loggedLimitShape = true;
+      console.log('[Claude Prompt Navigator] message_limit shape:', ml);
+    }
+    const pct = asPercent(ml.utilization) ?? asPercent(ml.percent) ?? asPercent(ml.used);
+    if (pct == null) return;
+    liveLimits = {
+      percent: pct,
+      resets_at: ml.resets_at || ml.resetsAt || null,
+      type: ml.type || null,
+      at: Date.now(),
+    };
+    renderMeters();
+  }
+
+  async function drainStream(res) {
+    if (!res || !res.body || !res.body.getReader) return;
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf('\n')) !== -1) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line.startsWith('data:')) continue;
+          const body = line.slice(5).trim();
+          if (!body || body === '[DONE]') continue;
+          let obj;
+          try { obj = JSON.parse(body); } catch (e) { continue; }
+          applyLiveLimits(obj);
+        }
+        if (buf.length > 500000) buf = buf.slice(-50000);   // never grow unbounded
+      }
+    } catch (e) { /* stream aborted, nothing to do */ }
+
+    renderMeters();
+
+    // Belt and braces. If the stream never carried a message_limit event, the
+    // polled figures would otherwise sit stale for up to a minute after a
+    // reply that just consumed quota. Expiring the cache forces a fresh read.
+    usageAt = 0;
+    fetchUsage().then(renderMeters).catch(() => {});
+  }
+
+  function installStreamWatcher() {
+    const orig = window.fetch;
+    if (typeof orig !== 'function' || orig.__cpnWrapped) return;
+    const wrapped = function (...args) {
+      const p = orig.apply(this, args);
+      try {
+        const a = args[0];
+        const url = typeof a === 'string' ? a : (a && a.url) || '';
+        if (/\/(retry_)?completion(\?|$)/.test(url)) {
+          // Submitting is itself a signal: quota is about to move, so the
+          // polled figures are stale from this instant. Refresh at the start
+          // as well as at the end, so the header reacts when you press send
+          // rather than only when the reply lands.
+          usageAt = 0;
+          fetchUsage().then(renderMeters).catch(() => {});
+          p.then((res) => { try { drainStream(res.clone()); } catch (e) {} }).catch(() => {});
+        }
+      } catch (e) {}
+      return p;
+    };
+    wrapped.__cpnWrapped = true;
+    try { window.fetch = wrapped; } catch (e) { /* frozen, fall back to polling */ }
+  }
+
+  async function fetchUsage() {
+    if (usage && Date.now() - usageAt < 60000) return usage;
+    // Cowork never resolves an org through a conversation fetch, so fall back
+    // to the first one. Plan usage is per account, not per conversation.
+    let org = resolvedOrg;
+    if (!org) { try { org = (await getOrgIds())[0]; } catch (e) { return null; } }
+    if (!org) return null;
+    let res;
+    try {
+      res = await fetch(`/api/organizations/${org}/usage`,
+        { headers: { accept: 'application/json' } });
+    } catch (e) { return usage; }
+    if (!res.ok) return usage;
+    const data = await res.json();
+    const pick = (kind) => (data.limits || []).find((l) => l.kind === kind) || null;
+    usage = { session: pick('session'), weekly: pick('weekly_all') };
+    usageAt = Date.now();
+    return usage;
+  }
+
+  function fmtUntil(iso) {
+    if (!iso) return '';
+    const ms = Date.parse(iso) - Date.now();
+    if (isNaN(ms) || ms <= 0) return 'due';
+    const m = Math.round(ms / 60000);
+    if (m < 60) return `${m}m`;
+    const h = Math.floor(m / 60);
+    return h < 24 ? `${h}h ${m % 60}m` : `${Math.floor(h / 24)}d ${h % 24}h`;
+  }
+
+  /*
+   * How far through a reset window we are.
+   *
+   * The bucket names in Claude's own usage payload give the durations away:
+   * five_hour and seven_day. The weekly limit's resets_at matches seven_day's
+   * exactly, which is the confirmation that the mapping is right.
+   */
+  const WINDOW_MS = {
+    Session: 5 * 60 * 60 * 1000,
+    Weekly: 7 * 24 * 60 * 60 * 1000,
+  };
+
+  function elapsedPct(resetsAt, windowMs) {
+    if (!resetsAt || !windowMs) return null;
+    const left = Date.parse(resetsAt) - Date.now();
+    if (isNaN(left)) return null;
+    return Math.max(0, Math.min(100, ((windowMs - left) / windowMs) * 100));
+  }
+
+  function setRow(r, pct, labelText, rightText, warn, title, timePct) {
+    if (!r) return;
+    if (pct == null) { r.row.style.display = 'none'; return; }
+    r.row.style.display = '';
+    r.fill.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    r.label.textContent = labelText;
+    r.right.textContent = rightText || '';
+    r.row.classList.toggle('cpn-warn', !!warn);
+    if (title) r.row.title = title;
+
+    // The marker rides the clock and is independent of the fill. A bar with no
+    // reset window, such as the context one, simply has no marker.
+    if (timePct == null) {
+      r.mark.classList.add('cpn-hidden');
+    } else {
+      r.mark.classList.remove('cpn-hidden');
+      r.mark.style.left = Math.max(0, Math.min(100, timePct)) + '%';
+    }
+  }
+
+  /*
+   * Which model and effort this chat is on.
+   *
+   * Both come from the conversation itself, so switching model or effort and
+   * sending a message updates the header on the next refetch rather than
+   * needing anything configured here. Effort is shown because it is the lever
+   * that decides how fast the session and weekly bars move, but note it does
+   * not change the context estimate: effort buys thinking, and thinking is not
+   * resent on later turns.
+   */
+  function renderModelLine() {
+    if (!modelLine) return;
+    if (mode !== 'chat' || !convModel) { modelLine.style.display = 'none'; return; }
+    modelLine.style.display = '';
+    const label = MODEL_LABELS[convModel] || convModel;
+    modelLine.textContent = convEffort ? `${label} · ${convEffort} effort` : label;
+    const win = CONTEXT_WINDOWS[convModel];
+    modelLine.title = `This chat runs ${convModel}`
+      + (convEffort ? ` at ${convEffort} effort.` : '.')
+      + (win ? `\n\nThat model's documented context window is ${fmtTokens(win)}, `
+        + 'though claude.ai does not report how much of it a chat actually gets, '
+        + 'which is why nothing here is shown as a percentage of it.' : '')
+      + '\n\nEffort drives how quickly your session and weekly usage burn. It does '
+      + 'not change the conversation size above, because it buys thinking and '
+      + 'thinking is not resent on later turns.';
+  }
+
+  /*
+   * Conversation size, stated as a measurement and nothing more.
+   *
+   * This used to be a percentage bar against the model's window, with a
+   * projection of how many questions remained. Both are gone, because neither
+   * could be made honest.
+   *
+   * The projection said things like 609 more questions. That is arithmetic on
+   * a denominator nobody can justify: claude.ai reports no usable context
+   * budget anywhere. There is no context window field on the conversation, no
+   * compaction or threshold signal, and no reachable models endpoint. The 1M
+   * figure is the model's documented API capability, not a promise about what
+   * this product allots a chat, and the numerator ignored the system prompt,
+   * skills, tool definitions and project knowledge, which on a project chat
+   * are the larger share.
+   *
+   * A measured token count is defensible. A share of an unknown budget is not.
+   * So this shows what was counted and lets the number speak by growing.
+   */
+  function renderContextLine(talk, docs) {
+    if (!ctxLine) return;
+    if (mode !== 'chat' || (!talk && !docs)) { ctxLine.style.display = 'none'; return; }
+    ctxLine.style.display = '';
+    ctxLine.textContent = docs
+      ? `≈ ${fmtTokens(talk)} in messages · ${fmtTokens(docs)} in documents`
+      : `≈ ${fmtTokens(talk)} in messages`;
+    ctxLine.title = 'Measured from this conversation at about 3.8 characters per '
+      + 'token, counting the live branch only, and skipping thinking because it '
+      + 'is not resent.\n\n'
+      + (docs ? 'The document figure is content that went through the window when '
+        + 'each file was written. Whether it is still carried on later turns is '
+        + 'not something the page reports.\n\n' : '')
+      + 'Deliberately not shown as a percentage. claude.ai publishes no usable '
+      + 'context budget, and this count cannot see your system prompt, skills, '
+      + 'tool definitions'
+      + (projectInfo
+        ? `, or this project's ${projectInfo.docs_count} documents and `
+          + `${projectInfo.files_count} files.`
+        : '.')
+      + '\n\nWatch it grow across a thread rather than reading it as a fill level.';
+  }
+
+  function renderMeters() {
+    if (!sessionRow || !weeklyRow) return;
+    renderModelLine();
+
+    renderContextLine(Math.round(convChars / 3.8), Math.round(docChars / 3.8));
+
+
+    if (!usage || (!usage.session && !usage.weekly)) {
+      setRow(sessionRow, null);
+      setRow(weeklyRow, null);
+      return;
+    }
+
+    // A live figure is only trusted for a while, and only against whichever
+    // limit Claude currently marks active, since the stream does not say
+    // which bucket it belongs to.
+    const live = liveLimits && Date.now() - liveLimits.at < 600000 ? liveLimits : null;
+    const present = [usage.session, usage.weekly].filter(Boolean);
+    const binding = present.find((l) => l.is_active)
+      || present.slice().sort((a, b) => b.percent - a.percent)[0]
+      || null;
+
+    const draw = (r, l, name) => {
+      if (!l) { setRow(r, null); return; }
+      const exact = live && l === binding;
+      const pct = exact ? live.percent : l.percent;
+      const shown = exact ? pct.toFixed(1) : Math.round(pct);
+      const timePct = elapsedPct(l.resets_at, WINDOW_MS[name]);
+      const pace = (timePct == null) ? ''
+        : (pct <= timePct
+          ? '\n\nThe fill sits behind the marker, so you are using this window '
+            + 'slower than it is running out.'
+          : '\n\nThe fill has passed the marker, so at this rate you will hit '
+            + 'the limit before the window resets.');
+      setRow(r, pct, `${name} ${shown}%`, fmtUntil(l.resets_at),
+        l.severity && l.severity !== 'normal',
+        `${name} usage, read from Claude directly.\n`
+        + `Resets ${l.resets_at ? new Date(l.resets_at).toLocaleString() : 'unknown'}\n`
+        + (exact ? 'This figure came from the reply stream and is exact.'
+                 : 'Polled every minute and rounded by Claude.')
+        + `\n\nThe white marker is the clock, not your usage. It shows how much of `
+        + `the ${name === 'Session' ? 'five hour' : 'seven day'} window has passed `
+        + 'and reaches the end as the timer hits zero.' + pace,
+        timePct);
+    };
+
+    draw(sessionRow, usage.session, 'Session');
+    draw(weeklyRow, usage.weekly, 'Weekly');
+  }
+
+  /*
+   * The cache countdown used to live here and has been removed.
+   *
+   * It counted down from the last reply against an invented five minute
+   * constant. claude.ai reports nothing about prompt caching at all: searching
+   * the conversation payload and the usage payload for cache, ttl or ephemeral
+   * fields returns nothing, so there was no way to know the real duration or
+   * even whether a cache existed. Anthropic runs more than one cache window,
+   * so the constant was a coin flip.
+   *
+   * It also said almost nothing in practice. Any thread you return to is older
+   * than five minutes, so the line read "Cache expired" nearly always — on the
+   * thread this was removed against, the last reply was 2,183 minutes old. And
+   * there was no action it enabled: on a plan you are bounded by the session
+   * and weekly percentages, which are measured and still shown.
+   */
+
+  /* ------------------------------------------------------------------ *
+   * Rail
+   * ------------------------------------------------------------------ */
+  let rail = null, railList = null, headCount = null, rows = [], activeIndex = -1;
+  let modelLine = null, ctxLine = null;
+  let sessionRow = null, weeklyRow = null;
+
+  function makeMeterRow() {
+    const row = document.createElement('div');
+    row.className = 'cpn-row';
+    const label = document.createElement('span');
+    label.className = 'cpn-row-label';
+    const bar = document.createElement('div');
+    bar.className = 'cpn-bar';
+    const fill = document.createElement('div');
+    fill.className = 'cpn-bar-fill';
+    const mark = document.createElement('div');
+    mark.className = 'cpn-bar-mark';
+    bar.append(fill, mark);
+    const right = document.createElement('span');
+    right.className = 'cpn-row-right';
+    row.append(label, bar, right);
+    return { row, label, bar, fill, mark, right };
+  }
+  let questions = [], documents = [], entries = [];
+  let peek = null;
+
+  function ensureRail() {
+    if (rail && document.body.contains(rail)) return rail;
+    rail = document.createElement('div');
+    rail.className = 'cpn-rail';
+    if (localStorage.getItem('cpn-pinned') === '1') rail.classList.add('cpn-pinned');
+
+    const head = document.createElement('div');
+    head.className = 'cpn-head';
+
+    const top = document.createElement('div');
+    top.className = 'cpn-head-top';
+    headCount = document.createElement('span');
+    headCount.textContent = 'Your questions';
+    const pin = document.createElement('button');
+    pin.className = 'cpn-pin';
+    pin.type = 'button';
+    pin.title = 'Keep the list open';
+    pin.textContent = '◉';
+    pin.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const on = rail.classList.toggle('cpn-pinned');
+      localStorage.setItem('cpn-pinned', on ? '1' : '0');
+    });
+    top.append(headCount, pin);
+
+    modelLine = document.createElement('div');
+    modelLine.className = 'cpn-meter';
+    ctxLine = document.createElement('div');
+    ctxLine.className = 'cpn-meter';
+    sessionRow = makeMeterRow();
+    weeklyRow = makeMeterRow();
+
+    head.append(top, modelLine, ctxLine, sessionRow.row, weeklyRow.row);
+    rail.appendChild(head);
+
+    railList = document.createElement('div');
+    railList.className = 'cpn-list';
+    rail.appendChild(railList);
+
+    rail.addEventListener('mouseleave', hidePeek);
+    document.body.appendChild(rail);
+    lastOffset = -1;
+    syncRailOffset();
+    return rail;
+  }
+
+  function render() {
+    ensureRail();
+    rows.forEach((r) => r.el.remove());
+    rows = [];
+
+    entries = mode === 'cowork'
+      ? questions.map((q, i) => ({ kind: 'q', q, qi: i }))
+      : buildEntries(questions, documents);
+
+    if (!entries.length) { rail.style.display = 'none'; return; }
+    rail.style.display = '';
+
+    if (mode === 'cowork') {
+      headCount.textContent = `${questions.length} on screen`;
+    } else {
+      const q = `${questions.length} question${questions.length === 1 ? '' : 's'}`;
+      headCount.textContent = documents.length
+        ? `${q} · ${documents.length} doc${documents.length === 1 ? '' : 's'}`
+        : q;
+    }
+
+    entries.forEach((entry, i) => {
+      const row = document.createElement('div');
+      const tick = document.createElement('span');
+      tick.className = 'cpn-tick';
+      const label = document.createElement('span');
+      label.className = 'cpn-label';
+
+      if (entry.kind === 'doc') {
+        const d = entry.doc;
+        row.className = d.onDisk ? 'cpn-item cpn-doc' : 'cpn-item cpn-doc cpn-gone';
+        row.title = d.onDisk
+          ? `${d.name}\n${Math.max(1, Math.round(d.size / 1024))} KB, still downloadable`
+          + `\nCreated after question ${entry.anchor + 1}`
+          : `${d.name}\nCreated after question ${entry.anchor + 1}, but no longer in the `
+          + 'sandbox. Claude clears older files, so this one cannot be downloaded again '
+          + 'without regenerating it.';
+        const icon = document.createElement('span');
+        icon.className = 'cpn-doc-icon';
+        icon.textContent = d.onDisk ? '◆' : '◇';
+        label.append(icon, document.createTextNode(d.name));
+      } else {
+        const item = entry.q;
+        row.className = 'cpn-item';
+        row.title = item.text.slice(0, 400);
+        const short = item.text.length > CONFIG.labelChars
+          ? item.text.slice(0, CONFIG.labelChars).trimEnd() + '…'
+          : item.text;
+        const num = document.createElement('span');
+        num.className = 'cpn-num';
+        num.textContent = String(item.n);
+        label.append(num, document.createTextNode(short));
+      }
+
+      row.append(tick, label);
+      row.addEventListener('click', () => jumpTo(i));
+      railList.appendChild(row);
+      rows.push({ el: row, entry });
+    });
+
+    renderMeters();
+    syncState();
+  }
+
+  /* Marks which questions are currently loaded, and which one you are on. */
+  function syncState() {
+    if (!questions.length) return;
+    const nodes = mountedNodes();
+    let best = -1, bestTop = -Infinity;
+    const line = window.innerHeight * 0.35;
+
+    rows.forEach((r, i) => {
+      if (r.entry.kind !== 'q') { r.node = null; return; }
+      const node = nodeFor(r.entry.q, nodes);
+      r.node = node;
+      r.el.classList.toggle('cpn-loaded', !!node);
+      if (node) {
+        const top = node.getBoundingClientRect().top;
+        if (top <= line && top > bestTop) { bestTop = top; best = i; }
+      }
+    });
+
+    if (best === -1) {
+      // Nothing above the line is loaded; fall back to the first loaded one.
+      const first = rows.findIndex((r) => r.node);
+      if (first !== -1) best = first;
+    }
+    setActive(best);
+  }
+
+  function setActive(i) {
+    if (i === -1 || i === activeIndex) return;
+    rows.forEach((r, n) => r.el.classList.toggle('cpn-active', n === i));
+    activeIndex = i;
+    const cur = rows[i];
+    if (cur && railList && railList.scrollHeight > railList.clientHeight) {
+      railList.scrollTo({ top: cur.el.offsetTop - railList.clientHeight / 2, behavior: 'smooth' });
+    }
+  }
+
+  function reveal(node, i) {
+    // Instant, not smooth. claude.ai's scroll container ignores smooth
+    // programmatic scrolling entirely: the call returns, nothing moves, and
+    // the message stays thousands of pixels off screen. Verified on 9 Aug 2026.
+    node.scrollIntoView({ block: 'center' });
+    node.classList.add('cpn-flash');
+    setTimeout(() => node.classList.add('cpn-flash-out'), CONFIG.flashMs - 600);
+    setTimeout(() => node.classList.remove('cpn-flash', 'cpn-flash-out'), CONFIG.flashMs);
+    setActive(i);
+  }
+
+  async function jumpTo(i) {
+    const entry = entries[i];
+    if (!entry) return;
+
+    // A document has no message of its own to scroll to, so it hands off to
+    // the question it was created after.
+    if (entry.kind === 'doc') {
+      const target = rows.findIndex((r) => r.entry.kind === 'q' && r.entry.qi === entry.anchor);
+      if (target !== -1) return jumpTo(target);
+      return;
+    }
+
+    const item = entry.q;
+    hidePeek();
+
+    let node = nodeFor(item, mountedNodes());
+    if (node) { reveal(node, i); return; }
+
+    // Not loaded into the page. Show the question immediately so the click
+    // always does something, move to roughly the right part of the thread,
+    // then watch briefly in case the app happens to mount it.
+    //
+    // Deliberately one scroll and no more. Each programmatic scroll makes the
+    // virtualiser tear down and rebuild large chunks of the message tree, and
+    // a loop that keeps scrolling to hunt for a message locks the tab up for
+    // several seconds. Testing on a 14 question thread showed the target
+    // almost never mounts from a scripted scroll anyway. Only real scrolling
+    // reliably loads it, which is what the note on the card tells you.
+    showPeek(i);
+
+    const sc = scroller();
+    if (sc && questions.length > 1) {
+      const frac = entry.qi / (questions.length - 1);
+      sc.scrollTop = Math.round(sc.scrollHeight * frac);
+      for (let attempt = 0; attempt < CONFIG.settleTries; attempt++) {
+        await sleep(CONFIG.settleMs);
+        node = nodeFor(item, mountedNodes());
+        if (node) { hidePeek(); reveal(node, i); return; }
+      }
+    }
+  }
+
+  function showPeek(i) {
+    hidePeek();
+    const item = entries[i] && entries[i].q;
+    if (!item) return;
+    peek = document.createElement('div');
+    peek.className = 'cpn-peek';
+    peek.textContent = item.text.slice(0, 1200);
+    const note = document.createElement('div');
+    note.className = 'cpn-peek-note';
+    note.textContent = 'Claude has not loaded this part of the chat into the page, '
+      + 'so there is nothing to scroll to yet. Scroll up a little and it will appear.';
+    peek.appendChild(note);
+    document.body.appendChild(peek);
+
+    const row = rows[i] && rows[i].el.getBoundingClientRect();
+    const top = row ? Math.min(Math.max(8, row.top - 20), window.innerHeight - 200) : 80;
+    peek.style.top = top + 'px';
+    setTimeout(hidePeek, 9000);
+  }
+
+  function hidePeek() {
+    if (peek) { peek.remove(); peek = null; }
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Loading and staying in sync
+   * ------------------------------------------------------------------ */
+  let currentRoute = null;
+  let mode = 'chat';
+  let domSignature = '';
+  let loading = false;
+
+  async function load(r) {
+    if (r.mode === 'cowork') {
+      questions = questionsFromDom();
+      documents = [];
+      convChars = 0;
+      domSignature = questions.map((q) => q.key).join('|');
+      activeIndex = -1;
+      await fetchUsage();
+      render();
+      return;
+    }
+    if (loading) return;
+    loading = true;
+    try {
+      questions = await fetchQuestions(r.id);
+      documents = await fetchDocuments(r.id);
+      await fetchProjectInfo();
+      await fetchUsage();
+    } catch (e) {
+      console.warn('[Claude Prompt Navigator] API unavailable, falling back to the '
+        + 'visible messages only:', e.message);
+      questions = questionsFromDom();
+      documents = [];
+    } finally {
+      loading = false;
+    }
+    activeIndex = -1;
+    render();
+  }
+
+  let refetchTimer = null;
+  function maybeRefetch() {
+    // A message on screen that is not in our list means you sent a new one.
+    const nodes = mountedNodes();
+    const unknown = nodes.some((el) => {
+      const k = keyOf(el.innerText || el.textContent);
+      return k && !questions.some((q) => q.key === k || k.startsWith(q.key) || q.key.startsWith(k));
+    });
+    if (!unknown) return;
+    clearTimeout(refetchTimer);
+    refetchTimer = setTimeout(() => {
+      const r = route();
+      if (r && r.mode === 'chat') load(r);
+    }, CONFIG.refetchMs);
+  }
+
+  function tick() {
+    const r = route();
+    const key = r ? `${r.mode}:${r.id}` : null;
+
+    if (key !== currentRoute) {
+      currentRoute = key;
+      mode = r ? r.mode : 'chat';
+      questions = [];
+      documents = [];
+      convChars = 0;
+      convModel = null;
+      convEffort = null;
+      domSignature = '';
+      activeIndex = -1;
+      render();
+      if (r) load(r);
+      return;
+    }
+    if (!r) return;
+
+    if (r.mode === 'cowork') {
+      // The rendered set changes as you scroll, so rebuild when it does.
+      const fresh = questionsFromDom();
+      const sig = fresh.map((q) => q.key).join('|');
+      if (sig !== domSignature) {
+        domSignature = sig;
+        questions = fresh;
+        activeIndex = -1;
+        render();
+      } else if (questions.length) {
+        syncState();
+      }
+      return;
+    }
+
+    if (questions.length) { syncState(); maybeRefetch(); }
+  }
+
+  function throttle(fn, ms) {
+    let waiting = false;
+    return function () {
+      if (waiting) return;
+      waiting = true;
+      setTimeout(() => { waiting = false; fn(); }, ms);
+    };
+  }
+
+  function start() {
+    injectStyles();
+    installStreamWatcher();
+    tick();
+
+    // The cache figure counts down and the window markers creep, so the whole
+    // meter block gets a second hand. It touches no network.
+    setInterval(renderMeters, 1000);
+
+    // The app is a single page app, so the URL changes without a reload.
+    setInterval(tick, 900);
+
+    // Plan usage moves on its own, independently of anything you do here.
+    setInterval(async () => { await fetchUsage(); renderMeters(); }, 60000);
+
+    new MutationObserver(throttle(() => {
+      if (questions.length) syncState();
+      syncRailOffset();      // a panel opening or closing is a DOM change
+    }, 350)).observe(document.body, { childList: true, subtree: true });
+
+    document.addEventListener('scroll', throttle(syncState, 140), true);
+    window.addEventListener('resize', throttle(() => {
+      syncState();
+      syncRailOffset();
+    }, 250));
+
+    if (CONFIG.hotkeys) {
+      window.addEventListener('keydown', (e) => {
+        if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+        if (e.key === 'ArrowUp') { e.preventDefault(); jumpTo(Math.max(0, activeIndex - 1)); }
+        // Clamp against entries, not questions: document rows sit in the same
+        // list, so entries is the longer of the two.
+        if (e.key === 'ArrowDown') { e.preventDefault(); jumpTo(Math.min(entries.length - 1, activeIndex + 1)); }
+      });
+    }
+
+    window.cpnDebug = () => ({
+      route: currentRoute,
+      mode,
+      complete: mode === 'chat',
+      questions: questions.length,
+      model: convModel,
+      effort: convEffort,
+      contextWindow: CONTEXT_WINDOWS[convModel] || CONFIG.contextLimitTokens,
+      estTokens: convChars || docChars
+        ? Math.round((convChars + docChars) / 3.8) : null,
+      sessionPercent: usage && usage.session ? usage.session.percent : null,
+      weeklyPercent: usage && usage.weekly ? usage.weekly.percent : null,
+      documents: documents.length,
+      stillOnDisk: documents.filter((d) => d.onDisk).length,
+      documentNames: documents.map((d) => (d.onDisk ? '' : '(gone) ') + d.name),
+      loadedInPage: rows.filter((r) => r.node).length,
+      active: activeIndex + 1,
+      first: questions[0] ? questions[0].text.slice(0, 60) : null,
+      last: questions.length ? questions[questions.length - 1].text.slice(0, 60) : null,
+    });
+    console.log('[Claude Prompt Navigator] v2 ready. Run cpnDebug() for status.');
+  }
+
+  // The watcher has to be in place before the app takes its own reference to
+  // fetch, which is why the script now runs at document-start. Everything that
+  // touches the DOM still waits for the document.
+  installStreamWatcher();
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', start);
+  } else {
+    start();
+  }
+})();

@@ -1,0 +1,39 @@
+Copyright (c) 2026 Deepith Kundar. All rights reserved.
+
+This source is published so that anyone considering installing it can read
+exactly what it does before trusting it with their browser session. It is not
+open source.
+
+GRANT
+
+You are permitted to download, install and run this software on browsers you
+personally control, and to modify your own copy for that purpose.
+
+RESERVED
+
+All other rights are reserved by the copyright holder. Without prior written
+permission you may not:
+
+  - redistribute this software, modified or unmodified, in any form
+  - publish it to an extension store, package registry or other distribution
+    channel
+  - incorporate it, in whole or in part, into another product
+  - use it, or any derivative of it, for any commercial purpose
+  - remove or alter this notice
+
+Viewing and forking on github.com are permitted only to the extent required by
+GitHub's Terms of Service, and confer no additional rights beyond those granted
+above.
+
+NO WARRANTY
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+This software is not affiliated with, endorsed by, or connected to Anthropic
+or OpenAI. It reads undocumented internal endpoints of those services, which
+may change or stop working at any time.
