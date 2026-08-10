@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Claude Prompt Navigator
 // @namespace    local.deepith
-// @version      3.4.1
-// @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it falls back to listing the messages currently on screen.
+// @version      3.5.0
+// @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it falls back to the messages on screen, and lists the files that session produced from its Outputs panel.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
 //               see LICENSE. Not open source, not for redistribution.
@@ -652,6 +652,60 @@
     return out;
   }
 
+  /* ------------------------------------------------------------------ *
+   * Cowork outputs
+   * ------------------------------------------------------------------ *
+   *
+   * Cowork has no file API. The endpoint chat uses,
+   * `/conversations/{id}/wiggle/list-files`, wants a UUID and a session id is
+   * `cse_…`, so it answers 400 — the app itself calls it and gets the same 400.
+   * Nothing under `/cowork/sessions/{id}` serves files either.
+   *
+   * What cowork does have is an Outputs panel on the right, listing every file
+   * the session produced, in creation order, accumulated across the whole
+   * session rather than the last turn. That panel is the source here.
+   *
+   * It is anchored by its heading text rather than by class name. The classes
+   * are generated and change; the word does not.
+   */
+  // Built from char codes rather than written as an escape, so the Private Use
+  // Area range cannot be mangled by whatever edits this file next.
+  const ICON_GLYPH = new RegExp(
+    '[' + String.fromCharCode(0xE000) + '-' + String.fromCharCode(0xF8FF) + ']', 'g');
+
+  function coworkOutputs() {
+    let node = null;
+    const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let t = walk.nextNode(); t; t = walk.nextNode()) {
+      if ((t.nodeValue || '').trim() === 'Outputs') { node = t; break; }
+    }
+    if (!node || !node.parentElement) return { files: [], collapsed: false, count: 0 };
+
+    const header = node.parentElement.closest('[class*="section-header"]');
+    if (!header || !header.parentElement) return { files: [], collapsed: false, count: 0 };
+
+    // Collapsing the panel hides the rows visually but leaves them in the
+    // document, so the list survives either way. The heading count is read as
+    // a cross-check on what the rows produced, not as a fallback.
+    const stated = (header.innerText || '').match(/Outputs\s*(\d+)/);
+    const count = stated ? Number(stated[1]) : 0;
+    const collapsed = header.getAttribute('aria-expanded') === 'false';
+
+    /*
+     * textContent, not innerText. The file-type icon is an icon-font glyph on
+     * a CSS pseudo-element, so innerText prefixes every name with a Private
+     * Use Area character that neither \s nor trim() removes. textContent does
+     * not see pseudo-elements at all. The PUA strip is belt and braces in case
+     * a future icon is a real child node.
+     */
+    const files = [...header.parentElement.querySelectorAll('button')]
+      .filter((b) => !header.contains(b))
+      .map((b) => ({ name: norm((b.textContent || '').replace(ICON_GLYPH, '')), el: b }))
+      .filter((f) => f.name);
+
+    return { files, collapsed, count: count || files.length };
+  }
+
   // Used only when the API is unreachable.
   function questionsFromDom() {
     for (const sel of MESSAGE_SELECTORS) {
@@ -1219,6 +1273,7 @@
     return { row, label, bar, fill, mark, right };
   }
   let questions = [], documents = [], entries = [];
+  let coworkDocCount = 0;
   let peek = null;
 
   function ensureRail() {
@@ -1340,14 +1395,23 @@
     rows = [];
 
     entries = mode === 'cowork'
-      ? questions.map((q, i) => ({ kind: 'q', q, qi: i }))
+      ? [
+        ...questions.map((q, i) => ({ kind: 'q', q, qi: i })),
+        ...documents.map((d) => ({ kind: 'doc', doc: d, anchor: null })),
+      ]
       : buildEntries(questions, documents);
 
     if (!entries.length) { rail.style.display = 'none'; return; }
     rail.style.display = '';
 
     if (mode === 'cowork') {
-      headCount.textContent = `${questions.length} on screen`;
+      const docs = coworkDocCount
+        ? ` · ${coworkDocCount} output${coworkDocCount === 1 ? '' : 's'}`
+        : '';
+      headCount.textContent = `${questions.length} on screen${docs}`;
+      headCount.title = 'Cowork has no conversation API, so the questions are '
+        + 'whatever the page has mounted. The outputs are read from the session\'s '
+        + 'Outputs panel and cover the whole session, not just what is on screen.';
     } else {
       const q = `${questions.length} question${questions.length === 1 ? '' : 's'}`;
       headCount.textContent = documents.length
@@ -1365,12 +1429,17 @@
       if (entry.kind === 'doc') {
         const d = entry.doc;
         row.className = d.onDisk ? 'cpn-item cpn-doc' : 'cpn-item cpn-doc cpn-gone';
-        row.title = d.onDisk
-          ? `${d.name}\n${Math.max(1, Math.round(d.size / 1024))} KB, still downloadable`
-          + `\nCreated after question ${entry.anchor + 1}`
-          : `${d.name}\nCreated after question ${entry.anchor + 1}, but no longer in the `
-          + 'sandbox. Claude clears older files, so this one cannot be downloaded again '
-          + 'without regenerating it.';
+        if (entry.anchor == null) {
+          // Cowork. No message anchor exists, so the tooltip does not claim one.
+          row.title = `${d.name}\nProduced by this session. Click to open it.`;
+        } else {
+          row.title = d.onDisk
+            ? `${d.name}\n${Math.max(1, Math.round(d.size / 1024))} KB, still downloadable`
+            + `\nCreated after question ${entry.anchor + 1}`
+            : `${d.name}\nCreated after question ${entry.anchor + 1}, but no longer in the `
+            + 'sandbox. Claude clears older files, so this one cannot be downloaded again '
+            + 'without regenerating it.';
+        }
         const icon = document.createElement('span');
         icon.className = 'cpn-doc-icon';
         icon.textContent = d.onDisk ? '◆' : '◇';
@@ -1450,8 +1519,15 @@
     if (!entry) return;
 
     // A document has no message of its own to scroll to, so it hands off to
-    // the question it was created after.
+    // the question it was created after. On cowork there is no anchor, but the
+    // Outputs panel row is a real button, so clicking ours opens the file
+    // through Claude's own preview rather than pretending to scroll somewhere.
     if (entry.kind === 'doc') {
+      if (entry.anchor == null) {
+        const el = entry.doc.el;
+        if (el && document.body.contains(el)) el.click();
+        return;
+      }
       const target = rows.findIndex((r) => r.entry.kind === 'q' && r.entry.qi === entry.anchor);
       if (target !== -1) return jumpTo(target);
       return;
@@ -1522,9 +1598,19 @@
   async function load(r) {
     if (r.mode === 'cowork') {
       questions = questionsFromDom();
-      documents = [];
+      const out = coworkOutputs();
+      coworkDocCount = out.count;
+      /*
+       * No anchor is available. Cowork virtualises its transcript the same way
+       * chat does, so at most a couple of messages are mounted and there is no
+       * message index to tie a file to. Rather than guess at a position, these
+       * sit together at the end of the rail in the order the panel lists them,
+       * which is the order they were created.
+       */
+      documents = out.files.map((f) => ({ name: f.name, onDisk: true, el: f.el }));
       convChars = 0;
-      domSignature = questions.map((q) => q.key).join('|');
+      domSignature = questions.map((q) => q.key).join('|')
+        + '#' + out.count + '#' + out.files.map((f) => f.name).join('|');
       activeIndex = -1;
       await fetchUsage();
       render();
@@ -1592,12 +1678,18 @@
     if (!r) return;
 
     if (r.mode === 'cowork') {
-      // The rendered set changes as you scroll, so rebuild when it does.
+      // The rendered set changes as you scroll, so rebuild when it does. The
+      // outputs move independently: Claude writes a file without you asking a
+      // new question, so they carry their own part of the signature.
       const fresh = questionsFromDom();
-      const sig = fresh.map((q) => q.key).join('|');
+      const out = coworkOutputs();
+      const sig = fresh.map((q) => q.key).join('|')
+        + '#' + out.count + '#' + out.files.map((f) => f.name).join('|');
       if (sig !== domSignature) {
         domSignature = sig;
         questions = fresh;
+        coworkDocCount = out.count;
+        documents = out.files.map((f) => ({ name: f.name, onDisk: true, el: f.el }));
         activeIndex = -1;
         render();
       } else if (questions.length) {

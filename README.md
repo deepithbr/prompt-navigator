@@ -14,6 +14,7 @@ Works as a Chrome extension or as two Tampermonkey userscripts. The files are th
 
 - Every question in the thread, numbered, read from Claude's own conversation API rather than the page — the page only ever holds three to five of them at a time
 - Documents Claude wrote, placed after the question that produced them. Solid marker means the file is still downloadable, hollow means it was created and has since been cleared from the sandbox
+- In a Cowork session, every file that session produced, read from its Outputs panel. Click one to open it
 - The model and effort the chat is running, read live, so switching either updates the header
 - Conversation size in tokens, measured
 - Session and weekly plan usage, with a marker showing how much of each window has elapsed
@@ -83,7 +84,7 @@ These are deliberate. Earlier versions guessed at them and the guesses were wron
 
 - **No context window percentage.** claude.ai publishes no usable context budget: no window field on the conversation, no compaction signal, no reachable models endpoint. The token count shown is a measurement of the conversation; it cannot see your system prompt, skills, tool definitions or project knowledge, so it is not expressed as a share of anything.
 - **Jumping to an unloaded message is approximate.** Claude virtualises the message list and programmatic scrolling does not remount older messages. Clicking a question from an unloaded part of the thread shows you its full text and moves you to roughly the right place.
-- **Cowork is partial.** `/cowork/` sessions are not served by the conversation API. The rail falls back to listing what is on screen and says `N on screen` so the count is not mistaken for the whole session.
+- **Cowork questions are partial, its outputs are not.** `/cowork/` sessions are not served by the conversation API, so the questions are whatever the page has mounted and the rail says `N on screen` rather than pretending to a full count. The outputs are complete: they come from the session's own Outputs panel, cover the whole session, and are listed in creation order. They cannot be positioned against individual questions, because cowork exposes no message index to anchor them to, so they sit together at the end of the rail. Clicking one opens it through Claude's own preview. If you hide the right-hand panel entirely the rail has nothing to read and the outputs disappear from it.
 - **ChatGPT message caps are not available.** `/backend-api/usage`, `/rate_limits` and `/conversation_limit` all return 404 and the model list carries no quota fields. Only the agent and task window is exposed, which is what the meter shows.
 - **Search covers titles everywhere, question text only where you have been.** claude.ai has no search endpoint, so the palette builds its own index. Thread titles are cheap and all of them are indexed. Question text is only indexed for threads you actually open, because fetching every thread up front measured at 5.7 minutes and 40MB. The index fills in as you use Claude normally.
 - **These are undocumented internal endpoints.** Anthropic and OpenAI can change them without notice, and when they do this breaks. There is a `MANUAL_SELECTOR` escape hatch at the top of the Claude script for the most likely breakage.
