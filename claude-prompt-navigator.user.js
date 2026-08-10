@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Prompt Navigator
 // @namespace    local.deepith
-// @version      3.6.0
+// @version      3.6.1
 // @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it falls back to the messages on screen, and lists the files that session produced from its Outputs panel.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -116,17 +116,33 @@
    * carried the header off the top of a long list, which is the one thing the
    * header exists to prevent.
    */
+  /*
+   * Collapsed, the rail stands off the right edge rather than sitting on it.
+   *
+   * Measured on a 1526px viewport: the message scroller ends 8px from the edge
+   * and its scrollbar is 10px wide, so the scrollbar occupies the band from
+   * 8px to 18px. At right: 0 the ticks sat at 6px to 16px and ran straight
+   * through it. 16px of offset plus the 6px padding puts them at 22px, clear
+   * of the band with a few pixels to spare.
+   *
+   * The offset also keeps the rail's hover area off the scrollbar, so reaching
+   * for the scrollbar no longer pops the rail open on the way.
+   *
+   * Open, it returns to the edge. The panel is built to sit flush there, and
+   * its right corners are square for that reason.
+   */
   .cpn-rail {
-    position: fixed; right: 0; top: 50%; transform: translateY(-50%);
+    position: fixed; right: 16px; top: 50%; transform: translateY(-50%);
     z-index: 2147483000;
     display: flex; flex-direction: column;
     padding: 8px 6px; max-height: 78vh; overflow: hidden;
     font: 12px/1.35 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
     color: #e6e4df; background: transparent;
     border-radius: 10px 0 0 10px;
-    transition: background 140ms ease, box-shadow 140ms ease;
+    transition: background 140ms ease, box-shadow 140ms ease, right 140ms ease;
   }
   .cpn-rail:hover, .cpn-rail.cpn-pinned {
+    right: 0;
     background: rgba(32,31,29,0.95);
     box-shadow: 0 4px 24px rgba(0,0,0,0.45);
   }
@@ -271,7 +287,11 @@
    * suspended for as long as the panel is open, leaving the tick strip, and
    * hovering still opens it deliberately.
    */
-  .cpn-rail.cpn-panelled.cpn-pinned:not(:hover) { background: transparent; box-shadow: none; }
+  /* Pinned but suspended renders as the tick strip, so it takes the strip's
+     offset too rather than staying pinned to the edge. */
+  .cpn-rail.cpn-panelled.cpn-pinned:not(:hover) {
+    right: 16px; background: transparent; box-shadow: none;
+  }
   .cpn-rail.cpn-panelled.cpn-pinned:not(:hover) .cpn-head {
     opacity: 0; height: 0; min-width: 0;
     padding: 0; margin: 0; border-bottom: 0;
