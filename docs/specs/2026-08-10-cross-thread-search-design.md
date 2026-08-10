@@ -9,7 +9,7 @@ Three features go into the rail. They share one idea: everything the rail
 already fetches during normal use is worth keeping, and almost nothing new
 needs to be fetched to make these work.
 
-- **Cross-thread question search.** A `Ctrl+K` palette that searches your
+- **Cross-thread question search.** An `Alt+K` palette that searches your
   questions across every conversation on the account, not only the open one,
   and jumps to a match in another thread.
 - **Weekly burn rate.** The rail already polls plan usage every 60 seconds.
@@ -152,7 +152,10 @@ means the palette also serves as the in-rail filter.
 
 ## Feature 1: cross-thread question search
 
-**Trigger.** `Ctrl+K` (and `Cmd+K` on macOS) opens the palette. `Escape`
+**Trigger.** `Alt+K` opens the palette, as does a `⌕` button in the rail
+header. `Ctrl+K` was the original choice and is not available: claude.ai binds
+it to its own command palette, and taking it would have removed a first-party
+feature. `Escape`
 closes it. Arrow keys move the highlight, `Enter` opens the highlighted
 result. The handler ignores the shortcut while focus is in the composer, so it
 never steals a keystroke from a message you are writing.
@@ -199,7 +202,7 @@ The rail then reads, for example, "at this rate you hit the weekly limit in
 marker are two readings of the same question from different directions.
 
 **What it refuses to say.** With fewer than two samples, or with samples less
-than 15 minutes apart, or with a rate at or below zero, the line is hidden
+than 10 minutes apart, or with a rate at or below zero, the line is hidden
 entirely. A projection built on two readings 40 seconds apart is noise
 multiplied by a large number, and showing it would be worse than showing
 nothing. Hidden is the correct default state on a fresh install.
@@ -211,7 +214,10 @@ and if you switch to a higher effort level it will underestimate. The tooltip
 says this in those words. It is a pace indicator, not a guarantee.
 
 Samples are discarded when the weekly window resets, since a percentage that
-has just dropped to zero would otherwise produce a large negative rate.
+has just dropped to zero would otherwise produce a large negative rate. A drop
+of more than five points is treated as a reset. Samples older than six hours
+are also dropped, because the projection is meant to read recent pace and a
+reading from yesterday morning dilutes it toward nothing.
 
 ## Feature 3: handoff generator
 
@@ -257,7 +263,7 @@ identical actions. Reimplementing something the host app already does well is
 a cost with no matching benefit.
 
 **Type to filter the rail.** An inline filter box in the rail header was the
-original plan. It was folded into the `Ctrl+K` palette instead, because the
+original plan. It was folded into the palette instead, because the
 palette searches the current thread first and then everything else. Building
 both would put two search boxes on screen with overlapping scope, and a user
 would have to learn which one to reach for. One entry point that widens its

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Prompt Navigator
 // @namespace    local.deepith
-// @version      3.4.0
+// @version      3.4.1
 // @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it falls back to listing the messages currently on screen.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -918,13 +918,50 @@
    * burn and a single busy one reads as catastrophic. It is a projection of
    * recent pace, not a promise.
    */
-  const weeklySamples = [];
+  const SAMPLE_KEY = 'cpn-weekly-samples';
+
+  /*
+   * Held in localStorage, not just in memory. Ten minutes of history is the
+   * entry price for this line, and an in-memory buffer pays it again after
+   * every reload — which for a browser tab is often enough that the line
+   * would rarely be there when wanted.
+   */
+  const SAMPLE_MAX_AGE = 6 * 3600000;
+
+  let weeklySamples = (() => {
+    try {
+      const v = JSON.parse(localStorage.getItem(SAMPLE_KEY) || '[]');
+      if (!Array.isArray(v)) return [];
+      // Yesterday's pace is not this afternoon's. Anything older is dropped.
+      const cut = Date.now() - SAMPLE_MAX_AGE;
+      return v.filter((s) => s && typeof s.pct === 'number' && s.t > cut);
+    } catch (e) { return []; }
+  })();
+
+  function saveWeeklySamples() {
+    try { localStorage.setItem(SAMPLE_KEY, JSON.stringify(weeklySamples)); } catch (e) {}
+  }
+
   function recordWeeklySample(w) {
     if (!w || typeof w.percent !== 'number') return;
+    /*
+     * A weekly reset drops the percentage to near zero. Kept alongside the
+     * pre-reset samples that produces a large negative rate, and the line
+     * would read flat for as long as the old readings survive in the buffer.
+     * The window it was measuring is gone, so the readings go with it.
+     */
     const last = weeklySamples[weeklySamples.length - 1];
-    if (last && last.pct === w.percent) return;   // no movement, no new sample
+    if (last && w.percent < last.pct - 5) {
+      weeklySamples = [];
+    } else if (last && last.pct === w.percent) {
+      return;                                     // no movement, no new sample
+    }
     weeklySamples.push({ t: Date.now(), pct: w.percent });
-    if (weeklySamples.length > 40) weeklySamples.shift();
+    const cut = Date.now() - SAMPLE_MAX_AGE;
+    while (weeklySamples.length > 40 || (weeklySamples.length > 2 && weeklySamples[0].t < cut)) {
+      weeklySamples.shift();
+    }
+    saveWeeklySamples();
   }
 
   function weeklyBurn(w) {
@@ -1712,8 +1749,28 @@
   /* ------------------------------------------------------------------ *
    * The palette
    * ------------------------------------------------------------------ */
-  let palette = null, paletteInput = null, paletteList = null;
+  let palette = null, paletteInput = null, paletteList = null, paletteHint = null;
   let paletteRows = [], paletteSel = 0, prefetched = new Set();
+
+  /*
+   * Coverage. Tier 2 only holds threads you have opened, so a search that
+   * finds nothing has two possible meanings: the question does not exist, or
+   * the thread holding it has never been opened here. Without this line you
+   * cannot tell those apart, which makes an empty result unreadable rather
+   * than merely disappointing. It is the reason the number is on screen.
+   */
+  function coverage() {
+    const deep = new Set();
+    for (const r of questionIndex) deep.add(r.convId);
+    return { deep: deep.size, total: threadIndex.length };
+  }
+
+  function coverageLine() {
+    const c = coverage();
+    if (!c.total) return 'Building the index…';
+    return `${c.deep} of ${c.total} threads searched word for word · `
+      + 'the rest by name and summary until you open them';
+  }
 
   function buildPalette() {
     if (palette && document.body.contains(palette)) return palette;
@@ -1728,10 +1785,9 @@
     paletteInput.spellcheck = false;
     paletteList = document.createElement('div');
     paletteList.className = 'cpn-pal-list';
-    const hint = document.createElement('div');
-    hint.className = 'cpn-pal-hint';
-    hint.textContent = 'Enter to open · Esc to close · Alt+K to reopen · this thread first, then everything else';
-    box.append(paletteInput, paletteList, hint);
+    paletteHint = document.createElement('div');
+    paletteHint.className = 'cpn-pal-hint';
+    box.append(paletteInput, paletteList, paletteHint);
     palette.appendChild(box);
 
     palette.addEventListener('mousedown', (e) => { if (e.target === palette) closePalette(); });
@@ -1810,11 +1866,12 @@
   function paintPalette() {
     searchFrame = null;
     paletteList.textContent = '';
+    paletteHint.textContent = 'Enter to open · Esc to close · ' + coverageLine();
     if (!paletteRows.length) {
       const empty = document.createElement('div');
       empty.className = 'cpn-pal-empty';
       empty.textContent = indexReady && threadIndex.length
-        ? 'Nothing matched.'
+        ? 'Nothing matched. Threads you have not opened are searchable by name only.'
         : 'Building the index…';
       paletteList.appendChild(empty);
       return;
