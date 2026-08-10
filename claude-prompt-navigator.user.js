@@ -279,6 +279,44 @@
   .cpn-rail.cpn-panelled.cpn-pinned:not(:hover) .cpn-item { max-width: 18px; }
   .cpn-rail.cpn-panelled.cpn-pinned:not(:hover) .cpn-label { opacity: 0; }
 
+  /* ---- command palette ---- */
+  .cpn-pal {
+    position: fixed; inset: 0; z-index: 2147483002;
+    display: none; align-items: flex-start; justify-content: center;
+    background: rgba(0,0,0,0.45); padding-top: 12vh;
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .cpn-pal.cpn-pal-open { display: flex; }
+  .cpn-pal-box {
+    width: min(640px, 92vw); max-height: 70vh; display: flex; flex-direction: column;
+    background: rgba(32,31,29,0.99); color: #e6e4df;
+    border: 1px solid rgba(140,135,125,0.28); border-radius: 10px;
+    box-shadow: 0 18px 60px rgba(0,0,0,0.55); overflow: hidden;
+  }
+  @media (prefers-color-scheme: light) {
+    .cpn-pal-box { background: rgba(252,251,249,0.99); color: #2b2924; }
+  }
+  .cpn-pal-input {
+    border: 0; outline: 0; background: transparent; color: inherit;
+    font: inherit; font-size: 15px; padding: 14px 16px;
+    border-bottom: 1px solid rgba(140,135,125,0.22);
+  }
+  .cpn-pal-list { overflow-y: auto; scrollbar-width: thin; }
+  .cpn-pal-row {
+    display: flex; align-items: baseline; gap: 9px;
+    padding: 7px 16px; cursor: pointer;
+  }
+  .cpn-pal-row.cpn-pal-on { background: rgba(140,135,125,0.18); }
+  .cpn-pal-icon { flex: 0 0 auto; opacity: .4; }
+  .cpn-pal-main { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cpn-pal-sub { flex: 0 0 auto; max-width: 34%; opacity: .42; font-size: 11px;
+                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cpn-pal-empty { padding: 18px 16px; opacity: .5; }
+  .cpn-pal-hint {
+    padding: 8px 16px; font-size: 10.5px; opacity: .4;
+    border-top: 1px solid rgba(140,135,125,0.22);
+  }
+
   .cpn-flash { outline: 2px solid #d97757 !important; outline-offset: 4px; border-radius: 8px; transition: outline-color 600ms ease; }
   .cpn-flash-out { outline-color: transparent !important; }
 
@@ -867,7 +905,43 @@
     const pick = (kind) => (data.limits || []).find((l) => l.kind === kind) || null;
     usage = { session: pick('session'), weekly: pick('weekly_all') };
     usageAt = Date.now();
+    recordWeeklySample(usage.weekly);
     return usage;
+  }
+
+  /*
+   * Weekly burn rate.
+   *
+   * The weekly percentage is polled once a minute, so successive samples give
+   * a rate of change. Two samples at least ten minutes apart are required
+   * before this says anything, otherwise a single idle minute reads as zero
+   * burn and a single busy one reads as catastrophic. It is a projection of
+   * recent pace, not a promise.
+   */
+  const weeklySamples = [];
+  function recordWeeklySample(w) {
+    if (!w || typeof w.percent !== 'number') return;
+    const last = weeklySamples[weeklySamples.length - 1];
+    if (last && last.pct === w.percent) return;   // no movement, no new sample
+    weeklySamples.push({ t: Date.now(), pct: w.percent });
+    if (weeklySamples.length > 40) weeklySamples.shift();
+  }
+
+  function weeklyBurn(w) {
+    if (!w || weeklySamples.length < 2) return null;
+    const first = weeklySamples[0], last = weeklySamples[weeklySamples.length - 1];
+    const hours = (last.t - first.t) / 3600000;
+    if (hours < 0.16) return null;                // under ten minutes of history
+    const perHour = (last.pct - first.pct) / hours;
+    if (perHour <= 0.05) return { perHour, flat: true };
+    const hoursToFull = (100 - last.pct) / perHour;
+    const msToReset = Date.parse(w.resets_at) - Date.now();
+    return {
+      perHour,
+      flat: false,
+      hoursToFull,
+      beatsReset: isFinite(msToReset) && hoursToFull * 3600000 < msToReset,
+    };
   }
 
   function fmtUntil(iso) {
@@ -1036,6 +1110,34 @@
 
     draw(sessionRow, usage.session, 'Session');
     draw(weeklyRow, usage.weekly, 'Weekly');
+    renderBurnLine(usage.weekly);
+  }
+
+  function renderBurnLine(w) {
+    if (!burnLine) return;
+    const b = weeklyBurn(w);
+    if (!b) {
+      // Says nothing until it has something measured to say.
+      burnLine.style.display = 'none';
+      return;
+    }
+    burnLine.style.display = '';
+    if (b.flat) {
+      burnLine.textContent = 'weekly usage flat';
+      burnLine.classList.remove('cpn-warn');
+    } else {
+      const h = b.hoursToFull;
+      const when = h < 1 ? `${Math.round(h * 60)}m` : `${h.toFixed(h < 10 ? 1 : 0)}h`;
+      burnLine.textContent = b.beatsReset
+        ? `at this rate, limit in ${when}`
+        : `at this rate, resets before the limit`;
+      burnLine.classList.toggle('cpn-warn', !!b.beatsReset);
+    }
+    burnLine.title = `Weekly usage has moved ${weeklyBurn(w).perHour.toFixed(2)} per cent `
+      + `per hour across ${weeklySamples.length} samples this session.\n\n`
+      + 'A projection of recent pace, not a promise. It stays quiet until there '
+      + 'are at least two samples ten minutes apart, because one idle minute '
+      + 'reads as zero burn and one busy minute reads as a crisis.';
   }
 
   /*
@@ -1059,7 +1161,7 @@
    * Rail
    * ------------------------------------------------------------------ */
   let rail = null, railList = null, headCount = null, rows = [], activeIndex = -1;
-  let modelLine = null, ctxLine = null;
+  let modelLine = null, ctxLine = null, burnLine = null;
   let sessionRow = null, weeklyRow = null;
 
   function makeMeterRow() {
@@ -1105,7 +1207,27 @@
       const on = rail.classList.toggle('cpn-pinned');
       localStorage.setItem('cpn-pinned', on ? '1' : '0');
     });
-    top.append(headCount, pin);
+    /*
+     * Handoff. You already write these by hand — C08_Cowork_Handover.md was
+     * one — so this assembles the same block from data the rail has already
+     * loaded, and puts it on the clipboard. No extra requests.
+     */
+    const hand = document.createElement('button');
+    hand.className = 'cpn-pin';
+    hand.type = 'button';
+    hand.title = 'Copy a handoff block for starting a fresh thread';
+    hand.textContent = '⎘';
+    hand.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const text = buildHandoff();
+      navigator.clipboard.writeText(text).then(() => {
+        const was = hand.textContent;
+        hand.textContent = '✓';
+        setTimeout(() => { hand.textContent = was; }, 1400);
+      }).catch(() => {});
+    });
+
+    top.append(headCount, hand, pin);
 
     modelLine = document.createElement('div');
     modelLine.className = 'cpn-meter';
@@ -1114,7 +1236,11 @@
     sessionRow = makeMeterRow();
     weeklyRow = makeMeterRow();
 
-    head.append(top, modelLine, ctxLine, sessionRow.row, weeklyRow.row);
+    burnLine = document.createElement('div');
+    burnLine.className = 'cpn-meter';
+    burnLine.style.display = 'none';
+
+    head.append(top, modelLine, ctxLine, sessionRow.row, weeklyRow.row, burnLine);
     rail.appendChild(head);
 
     railList = document.createElement('div');
@@ -1126,6 +1252,35 @@
     lastOffset = -1;
     syncRailOffset();
     return rail;
+  }
+
+  function buildHandoff() {
+    const title = document.title.replace(/ - Claude$/, '');
+    const lines = [];
+    lines.push(`Handoff from an earlier Claude thread: ${title}`);
+    lines.push('');
+    if (convModel) {
+      lines.push(`That thread ran ${MODEL_LABELS[convModel] || convModel}`
+        + (convEffort ? ` at ${convEffort} effort.` : '.'));
+      lines.push('');
+    }
+    lines.push(`WHAT I ASKED (${questions.length} in order)`);
+    questions.forEach((q) => {
+      const t = q.text.replace(/\s+/g, ' ').trim();
+      lines.push(`${q.n}. ${t.length > 160 ? t.slice(0, 160).trimEnd() + '…' : t}`);
+    });
+    if (documents.length) {
+      lines.push('');
+      lines.push(`WHAT IT PRODUCED (${documents.length})`);
+      documents.forEach((d) => {
+        lines.push(`- ${d.name}${d.onDisk ? '' : '  (no longer downloadable, would need regenerating)'}`);
+      });
+    }
+    lines.push('');
+    lines.push('WHAT I NEED FROM YOU');
+    lines.push('Pick up from the last item above. Ask me for anything in that list '
+      + 'you need the contents of, rather than assuming what it said.');
+    return lines.join('\n');
   }
 
   function render() {
@@ -1341,6 +1496,12 @@
     }
     activeIndex = -1;
     render();
+
+    // Free tier-2 indexing: these questions were fetched to draw the rail.
+    if (r.mode === 'chat' && questions.length) {
+      recordQuestions(r.id, document.title.replace(/ - Claude$/, ''), questions);
+    }
+    consumePendingJump();
   }
 
   let refetchTimer = null;
@@ -1406,6 +1567,333 @@
     };
   }
 
+  /* ================================================================== *
+   * Cross-thread search
+   * ================================================================== *
+   *
+   * Measured on the account this was built against:
+   *
+   *   conversations                       544
+   *   with a populated summary            537
+   *   one list call                       1.77 MB in 809 ms
+   *   one conversation's messages         75 KB in 630 ms
+   *   indexing all of them up front       5.7 minutes, 40 MB
+   *
+   * So there is no upfront crawl. Two tiers instead:
+   *
+   *   Tier 1  one list call gives name and summary for every thread.
+   *   Tier 2  the rail already fetches every question when you open a
+   *           thread, so those get written to the index for free. Threads
+   *           you have worked in become searchable word for word.
+   *
+   * claude.ai has no search endpoint — /search, /chat_conversations/search
+   * and the rest return 404 or 400 — so the matching happens locally.
+   */
+  const DB_NAME = 'cpn-index';
+  const DB_VERSION = 1;
+  let db = null;
+
+  /* In-memory mirror. The palette reads only from here, never the network,
+     and every searchable string is lowercased once on the way in. */
+  let threadIndex = [];      // { id, name, summary, hay, updated }
+  let questionIndex = [];    // { id, convId, convName, n, text, hay }
+  let indexReady = false;
+
+  function openDb() {
+    return new Promise((resolve) => {
+      let req;
+      try { req = indexedDB.open(DB_NAME, DB_VERSION); }
+      catch (e) { return resolve(null); }
+      req.onupgradeneeded = () => {
+        const d = req.result;
+        if (!d.objectStoreNames.contains('threads')) d.createObjectStore('threads', { keyPath: 'id' });
+        if (!d.objectStoreNames.contains('questions')) d.createObjectStore('questions', { keyPath: 'key' });
+        if (!d.objectStoreNames.contains('meta')) d.createObjectStore('meta', { keyPath: 'k' });
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    });
+  }
+
+  function idbAll(store) {
+    return new Promise((resolve) => {
+      if (!db) return resolve([]);
+      let tx;
+      try { tx = db.transaction(store, 'readonly'); } catch (e) { return resolve([]); }
+      const req = tx.objectStore(store).getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => resolve([]);
+    });
+  }
+
+  function idbPut(store, rows) {
+    return new Promise((resolve) => {
+      if (!db || !rows.length) return resolve();
+      let tx;
+      try { tx = db.transaction(store, 'readwrite'); } catch (e) { return resolve(); }
+      const os = tx.objectStore(store);
+      rows.forEach((r) => { try { os.put(r); } catch (e) {} });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  }
+
+  const lower = (s) => (s || '').toLowerCase();
+
+  /* Tier 1. One call, and only when the cache has gone stale. */
+  async function syncThreads(force) {
+    const meta = await idbAll('meta');
+    const last = (meta.find((m) => m.k === 'threadsSyncedAt') || {}).v || 0;
+    if (!force && Date.now() - last < 3600000 && threadIndex.length) return;
+
+    let org = resolvedOrg;
+    if (!org) { try { org = (await getOrgIds())[0]; } catch (e) { return; } }
+    if (!org) return;
+
+    let list;
+    try {
+      const r = await fetch(`/api/organizations/${org}/chat_conversations`,
+        { headers: { accept: 'application/json' } });
+      if (!r.ok) return;
+      list = await r.json();
+    } catch (e) { return; }
+    if (!Array.isArray(list)) return;
+
+    const rows = list.map((c) => {
+      const name = c.name || '(untitled)';
+      const summary = c.summary || '';
+      return {
+        id: c.uuid, name, summary,
+        updated: Date.parse(c.updated_at) || 0,
+        hay: lower(name + ' ' + summary),
+      };
+    });
+    threadIndex = rows.sort((a, b) => b.updated - a.updated);
+    await idbPut('threads', rows);
+    await idbPut('meta', [{ k: 'threadsSyncedAt', v: Date.now() }]);
+  }
+
+  /* Tier 2. Free: these questions were already fetched to draw the rail. */
+  async function recordQuestions(convId, convName, qs) {
+    if (!convId || !qs.length) return;
+    const rows = qs.map((q) => ({
+      key: convId + ':' + q.n,
+      convId, convName, n: q.n, text: q.text,
+      hay: lower(q.text),
+    }));
+    const byKey = new Map(questionIndex.map((r) => [r.key, r]));
+    rows.forEach((r) => byKey.set(r.key, r));
+    questionIndex = [...byKey.values()];
+    await idbPut('questions', rows);
+  }
+
+  async function hydrateIndex() {
+    db = await openDb();
+    const [t, q] = await Promise.all([idbAll('threads'), idbAll('questions')]);
+    if (t.length) threadIndex = t.sort((a, b) => b.updated - a.updated);
+    if (q.length) questionIndex = q;
+    indexReady = true;
+  }
+
+  /* ------------------------------------------------------------------ *
+   * The palette
+   * ------------------------------------------------------------------ */
+  let palette = null, paletteInput = null, paletteList = null;
+  let paletteRows = [], paletteSel = 0, prefetched = new Set();
+
+  function buildPalette() {
+    if (palette && document.body.contains(palette)) return palette;
+    palette = document.createElement('div');
+    palette.className = 'cpn-pal';
+    const box = document.createElement('div');
+    box.className = 'cpn-pal-box';
+    paletteInput = document.createElement('input');
+    paletteInput.className = 'cpn-pal-input';
+    paletteInput.type = 'text';
+    paletteInput.placeholder = 'Search your questions and threads…';
+    paletteInput.spellcheck = false;
+    paletteList = document.createElement('div');
+    paletteList.className = 'cpn-pal-list';
+    const hint = document.createElement('div');
+    hint.className = 'cpn-pal-hint';
+    hint.textContent = 'Enter to open · Esc to close · this thread first, then everything else';
+    box.append(paletteInput, paletteList, hint);
+    palette.appendChild(box);
+
+    palette.addEventListener('mousedown', (e) => { if (e.target === palette) closePalette(); });
+    paletteInput.addEventListener('input', () => runSearch(paletteInput.value));
+    paletteInput.addEventListener('keydown', onPaletteKey);
+    document.body.appendChild(palette);
+    return palette;
+  }
+
+  function openPalette() {
+    buildPalette();
+    palette.classList.add('cpn-pal-open');
+    paletteInput.value = '';
+    paletteInput.focus();
+    runSearch('');
+    // Refresh tier 1 quietly behind the open palette; it never blocks typing.
+    syncThreads(false).then(() => { if (isPaletteOpen()) runSearch(paletteInput.value); });
+  }
+
+  function closePalette() {
+    if (palette) palette.classList.remove('cpn-pal-open');
+  }
+
+  function isPaletteOpen() {
+    return !!palette && palette.classList.contains('cpn-pal-open');
+  }
+
+  /*
+   * Search runs against strings lowercased once at index time, caps the
+   * rendered rows, and paints inside a single animation frame. Nothing here
+   * touches the network, which is what keeps typing smooth.
+   */
+  const MAX_ROWS = 50;
+  let searchFrame = null;
+
+  function runSearch(raw) {
+    const q = lower(raw.trim());
+    const here = currentRoute && currentRoute.startsWith('chat:')
+      ? currentRoute.slice(5) : null;
+    const rows = [];
+
+    if (!q) {
+      questions.slice(0, 8).forEach((x) => rows.push(
+        { kind: 'q', convId: here, label: `${x.n}. ${x.text}`, sub: 'this thread', n: x.n }));
+      threadIndex.slice(0, MAX_ROWS - rows.length).forEach((t) => rows.push(
+        { kind: 't', convId: t.id, label: t.name, sub: 'thread' }));
+    } else {
+      // Questions in the thread you are already looking at come first.
+      questions.forEach((x) => {
+        if (rows.length >= MAX_ROWS) return;
+        if (lower(x.text).indexOf(q) !== -1) {
+          rows.push({ kind: 'q', convId: here, label: `${x.n}. ${x.text}`, sub: 'this thread', n: x.n });
+        }
+      });
+      for (const r of questionIndex) {
+        if (rows.length >= MAX_ROWS) break;
+        if (r.convId === here) continue;
+        if (r.hay.indexOf(q) !== -1) {
+          rows.push({ kind: 'q', convId: r.convId, label: `${r.n}. ${r.text}`, sub: r.convName, n: r.n });
+        }
+      }
+      for (const t of threadIndex) {
+        if (rows.length >= MAX_ROWS) break;
+        if (t.hay.indexOf(q) !== -1 && !rows.some((x) => x.convId === t.id && x.kind === 't')) {
+          rows.push({ kind: 't', convId: t.id, label: t.name, sub: 'thread' });
+        }
+      }
+    }
+
+    paletteRows = rows;
+    paletteSel = 0;
+    if (searchFrame) cancelAnimationFrame(searchFrame);
+    searchFrame = requestAnimationFrame(paintPalette);
+  }
+
+  function paintPalette() {
+    searchFrame = null;
+    paletteList.textContent = '';
+    if (!paletteRows.length) {
+      const empty = document.createElement('div');
+      empty.className = 'cpn-pal-empty';
+      empty.textContent = indexReady && threadIndex.length
+        ? 'Nothing matched.'
+        : 'Building the index…';
+      paletteList.appendChild(empty);
+      return;
+    }
+    paletteRows.forEach((r, i) => {
+      const el = document.createElement('div');
+      el.className = 'cpn-pal-row' + (i === paletteSel ? ' cpn-pal-on' : '');
+      const icon = document.createElement('span');
+      icon.className = 'cpn-pal-icon';
+      icon.textContent = r.kind === 'q' ? '—' : '◇';
+      const main = document.createElement('span');
+      main.className = 'cpn-pal-main';
+      main.textContent = r.label;
+      const sub = document.createElement('span');
+      sub.className = 'cpn-pal-sub';
+      sub.textContent = r.sub;
+      el.append(icon, main, sub);
+      el.addEventListener('mouseenter', () => select(i));
+      el.addEventListener('click', () => activate(i));
+      paletteList.appendChild(el);
+    });
+    prefetchSelected();
+  }
+
+  function select(i) {
+    if (i === paletteSel) return;
+    paletteSel = Math.max(0, Math.min(paletteRows.length - 1, i));
+    [...paletteList.children].forEach((el, n) =>
+      el.classList.toggle('cpn-pal-on', n === paletteSel));
+    const el = paletteList.children[paletteSel];
+    if (el) el.scrollIntoView({ block: 'nearest' });
+    prefetchSelected();
+  }
+
+  /* Warms the thread under the cursor so Enter has nothing left to wait on. */
+  function prefetchSelected() {
+    const r = paletteRows[paletteSel];
+    if (!r || !r.convId || r.convId === (currentRoute || '').slice(5)) return;
+    if (prefetched.has(r.convId)) return;
+    prefetched.add(r.convId);
+    if (!resolvedOrg) return;
+    fetch(`/api/organizations/${resolvedOrg}/chat_conversations/${r.convId}`
+      + '?tree=True&rendering_mode=messages', { headers: { accept: 'application/json' } })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data) return;
+        const msgs = (data.chat_messages || []).filter((m) => m.sender === 'human');
+        recordQuestions(r.convId, data.name || '', msgs.map((m, i) => ({
+          n: i + 1, text: textOfMessage(m) || '(attachment only)',
+        })));
+      })
+      .catch(() => {});
+  }
+
+  function onPaletteKey(e) {
+    if (e.key === 'Escape') { e.preventDefault(); closePalette(); return; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); select(paletteSel + 1); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); select(paletteSel - 1); return; }
+    if (e.key === 'Enter') { e.preventDefault(); activate(paletteSel); }
+  }
+
+  function activate(i) {
+    const r = paletteRows[i];
+    if (!r) return;
+    closePalette();
+    const here = (currentRoute || '').startsWith('chat:') ? currentRoute.slice(5) : null;
+
+    if (r.convId && r.convId !== here) {
+      // Client-side navigation, so no page reload.
+      history.pushState({}, '', `/chat/${r.convId}`);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+      if (r.kind === 'q' && r.n) pendingJump = { convId: r.convId, n: r.n };
+      tick();
+      return;
+    }
+    if (r.kind === 'q' && r.n) {
+      const idx = entries.findIndex((en) => en.kind === 'q' && en.q && en.q.n === r.n);
+      if (idx !== -1) jumpTo(idx);
+    }
+  }
+
+  /* Set when a jump crosses threads; consumed once the new thread loads. */
+  let pendingJump = null;
+  function consumePendingJump() {
+    if (!pendingJump) return;
+    const here = (currentRoute || '').startsWith('chat:') ? currentRoute.slice(5) : null;
+    if (pendingJump.convId !== here) return;
+    const want = pendingJump.n;
+    pendingJump = null;
+    const idx = entries.findIndex((en) => en.kind === 'q' && en.q && en.q.n === want);
+    if (idx !== -1) jumpTo(idx);
+  }
+
   function start() {
     injectStyles();
     installStreamWatcher();
@@ -1431,6 +1919,18 @@
       syncState();
       syncRailOffset();
     }, 250));
+
+    // Index: hydrate from disk first so the palette is usable immediately,
+    // then refresh tier 1 once the page has settled.
+    hydrateIndex().then(() => {
+      if ('requestIdleCallback' in window) requestIdleCallback(() => syncThreads(false));
+      else setTimeout(() => syncThreads(false), 3000);
+    });
+
+    window.addEventListener('keydown', (e) => {
+      const combo = (e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'k';
+      if (combo) { e.preventDefault(); isPaletteOpen() ? closePalette() : openPalette(); }
+    }, true);
 
     if (CONFIG.hotkeys) {
       window.addEventListener('keydown', (e) => {
