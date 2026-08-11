@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Prompt Navigator
 // @namespace    local.deepith
-// @version      3.7.0
+// @version      3.8.0
 // @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it reads the session event log for the same complete list, and shows the files that session produced.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -476,6 +476,18 @@
         return total + c;
       }, 0);
 
+      /*
+       * Kept for the export. The rail itself only needs your questions, but an
+       * export of a thread without Claude's replies is a table of contents, not
+       * a transcript, and re-fetching the conversation to get them back would
+       * be a second download of something already in hand.
+       */
+      convTurns = msgs.map((m) => ({
+        who: m.sender === 'human' ? 'you' : 'claude',
+        text: textOfMessage(m),
+        at: m.created_at || null,
+      })).filter((t) => t.text);
+
       const humans = msgs.filter((m) => m.sender === 'human');
       return humans.map((m, i) => {
         const text = textOfMessage(m);
@@ -843,7 +855,7 @@
    * A long session is several megabytes of mostly tool output, and there is no
    * server-side filter for that: limit is honoured, event type filters are not.
    */
-  async function fetchCoworkQuestions(sessionId, onPage) {
+  async function fetchCoworkSession(sessionId, onPage) {
     const events = [];
     let cursor = null;
     for (let page = 0; page < MAX_EVENT_PAGES; page++) {
@@ -854,11 +866,50 @@
       const body = await res.json();
       const batch = body && body.data ? body.data : [];
       events.push(...batch);
-      if (onPage) onPage(coworkQuestionsFrom(events));
+      if (onPage) onPage(coworkQuestionsFrom(events), coworkWritesFrom(events), events);
       if (!body.next_cursor || !batch.length) break;
       cursor = body.next_cursor;
     }
-    return coworkQuestionsFrom(events);
+    return {
+      questions: coworkQuestionsFrom(events),
+      writes: coworkWritesFrom(events),
+      events,
+    };
+  }
+
+  /*
+   * When each file was first written, by sequence number.
+   *
+   * This is what lets a cowork output sit next to the question that produced
+   * it rather than in a heap at the end of the rail. Three tools put a file on
+   * disk: Write and Edit name one in `file_path`, SendUserFile lists them in
+   * `files`. The earliest sequence wins, because a file that is rewritten four
+   * times belongs to the question that first asked for it, not the last one
+   * that touched it.
+   */
+  function coworkWritesFrom(events) {
+    const first = new Map();
+    const note = (seq, path) => {
+      const name = String(path || '').split(/[\\/]/).pop();
+      if (!name || !/\.[A-Za-z0-9]{1,5}$/.test(name)) return;
+      const k = artifactKey(name);
+      if (!first.has(k) || seq < first.get(k)) first.set(k, seq);
+    };
+    events.forEach((e) => {
+      if (e.event_type !== 'assistant') return;
+      const c = e.payload && e.payload.message && e.payload.message.content;
+      if (!Array.isArray(c)) return;
+      const seq = Number(e.sequence_num);
+      c.forEach((b) => {
+        if (!b || b.type !== 'tool_use') return;
+        const input = b.input || {};
+        if (b.name === 'Write' || b.name === 'Edit') note(seq, input.file_path);
+        if (b.name === 'SendUserFile' && Array.isArray(input.files)) {
+          input.files.forEach((f) => note(seq, f));
+        }
+      });
+    });
+    return first;
   }
 
   function coworkQuestionsFrom(events) {
@@ -871,6 +922,40 @@
       .map((e) => ({ seq: Number(e.sequence_num), text: cleanCoworkText(e.payload.message.content) }))
       .filter((q) => q.text && !seen.has(q.seq) && seen.add(q.seq))
       .map((q, i) => ({ n: i + 1, uuid: null, text: q.text, key: keyOf(q.text), seq: q.seq }));
+  }
+
+  /*
+   * Cowork outputs, placed against the question that produced them.
+   *
+   * Both sides carry a sequence number now: questions from their own events,
+   * files from the Write, Edit or SendUserFile call that first created them.
+   * A file belongs after the last question whose sequence precedes its own.
+   *
+   * A file with no matching write still gets shown, at the end, rather than
+   * dropped. That happens when the panel lists something produced by a route
+   * these three tools do not cover, and losing it would be worse than putting
+   * it in an honest heap.
+   */
+  function buildCoworkEntries(qs, docs) {
+    const out = [];
+    const placed = new Map();
+    const orphans = [];
+
+    docs.forEach((d) => {
+      if (d.seq == null) { orphans.push(d); return; }
+      let a = -1;
+      qs.forEach((q, i) => { if (q.seq != null && q.seq <= d.seq) a = i; });
+      if (a === -1) { orphans.push(d); return; }
+      if (!placed.has(a)) placed.set(a, []);
+      placed.get(a).push(d);
+    });
+
+    qs.forEach((q, i) => {
+      out.push({ kind: 'q', q, qi: i });
+      (placed.get(i) || []).forEach((d) => out.push({ kind: 'doc', doc: d, anchor: i }));
+    });
+    orphans.forEach((d) => out.push({ kind: 'doc', doc: d, anchor: null }));
+    return out;
   }
 
   // Used only when the API is unreachable.
@@ -1025,6 +1110,7 @@
   let liveLimits = null;      // exact figures pushed down the reply stream
   let docChars = 0;           // text-shaped documents Claude wrote in this chat
   let projectUuid = null;
+  let convTurns = [];        // both sides of the thread, for the export
   let convModel = null;      // drives the context bar's denominator
   let convEffort = null;     // high / xhigh / max, drives how fast plan usage burns
   let projectInfo = null;     // counts only, the cheap end of the project API
@@ -1535,7 +1621,20 @@
       isPaletteOpen() ? closePalette() : openPalette();
     });
 
-    top.append(headCount, find, hand, pin);
+    const save = document.createElement('button');
+    save.className = 'cpn-pin';
+    save.type = 'button';
+    save.title = 'Download the whole thread as markdown, both sides of it';
+    save.textContent = '⤓';
+    save.addEventListener('click', (e) => {
+      e.stopPropagation();
+      downloadExport();
+      const was = save.textContent;
+      save.textContent = '✓';
+      setTimeout(() => { save.textContent = was; }, 1400);
+    });
+
+    top.append(headCount, find, save, hand, pin);
 
     modelLine = document.createElement('div');
     modelLine.className = 'cpn-meter';
@@ -1560,6 +1659,85 @@
     lastOffset = -1;
     syncRailOffset();
     return rail;
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Export
+   * ------------------------------------------------------------------ *
+   *
+   * The handoff button carries the shape of a thread: what was asked, what
+   * came out. This carries the content, both sides of it, as a markdown file.
+   *
+   * Nothing extra is fetched. A chat thread was already downloaded whole to
+   * draw the rail, and a cowork session's events were already walked for its
+   * questions. Both are kept for exactly this.
+   */
+  function coworkTurns() {
+    return coworkEvents
+      .filter((e) => e.event_type === 'user' || e.event_type === 'assistant')
+      .sort((a, b) => Number(a.sequence_num) - Number(b.sequence_num))
+      .map((e) => {
+        const msg = e.payload && e.payload.message;
+        if (!msg) return null;
+        if (e.event_type === 'user') {
+          if (e.source !== 'client' || typeof msg.content !== 'string') return null;
+          const text = cleanCoworkText(msg.content);
+          return text ? { who: 'you', text } : null;
+        }
+        // Assistant turns are blocks; only the prose is wanted, not tool calls.
+        const blocks = Array.isArray(msg.content) ? msg.content : [];
+        const text = norm(blocks.filter((b) => b && b.type === 'text')
+          .map((b) => b.text || '').join('\n'));
+        return text ? { who: 'claude', text } : null;
+      })
+      .filter(Boolean);
+  }
+
+  function buildExport() {
+    const title = document.title.replace(/ - Claude$/, '');
+    const turns = mode === 'cowork' ? coworkTurns() : convTurns;
+    const lines = [`# ${title}`, ''];
+
+    lines.push(`Exported ${new Date().toLocaleString()}`);
+    lines.push(`Source: ${location.href}`);
+    if (convModel) lines.push(`Model: ${convModel}${convEffort ? ` (${convEffort} effort)` : ''}`);
+    lines.push(`${questions.length} question${questions.length === 1 ? '' : 's'}`
+      + (documents.length ? `, ${documents.length} file${documents.length === 1 ? '' : 's'}` : ''));
+    lines.push('');
+
+    if (documents.length) {
+      lines.push('## Files produced', '');
+      documents.forEach((d) => {
+        lines.push(`- ${d.name}${d.onDisk ? '' : '  (no longer downloadable)'}`);
+      });
+      lines.push('');
+    }
+
+    lines.push('## Transcript', '');
+    if (!turns.length) {
+      lines.push('_The transcript was not available. This happens on a Cowork '
+        + 'session whose event walk had not finished, or a chat the API declined._');
+    }
+    turns.forEach((t) => {
+      lines.push(t.who === 'you' ? '### You' : '### Claude', '', t.text, '');
+    });
+    return lines.join('\n');
+  }
+
+  function downloadExport() {
+    const title = document.title.replace(/ - Claude$/, '');
+    const safe = (title || 'claude-thread').replace(/[^A-Za-z0-9]+/g, '_').slice(0, 60);
+    const blob = new Blob([buildExport()], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${safe}.md`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // Revoked on a timer: revoking synchronously can cancel the download in
+    // Chrome before it has read the blob.
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
   }
 
   function buildHandoff() {
@@ -1597,10 +1775,7 @@
     rows = [];
 
     entries = mode === 'cowork'
-      ? [
-        ...questions.map((q, i) => ({ kind: 'q', q, qi: i })),
-        ...documents.map((d) => ({ kind: 'doc', doc: d, anchor: null })),
-      ]
+      ? buildCoworkEntries(questions, documents)
       : buildEntries(questions, documents);
 
     if (!entries.length) { rail.style.display = 'none'; return; }
@@ -1638,8 +1813,14 @@
       if (entry.kind === 'doc') {
         const d = entry.doc;
         row.className = d.onDisk ? 'cpn-item cpn-doc' : 'cpn-item cpn-doc cpn-gone';
-        if (entry.anchor == null) {
-          // Cowork. No message anchor exists, so the tooltip does not claim one.
+        if (d.el) {
+          // Cowork. It has no byte count, so the tooltip does not invent one.
+          row.title = d.name
+            + (entry.anchor == null
+              ? '\nProduced by this session.'
+              : `\nCreated after question ${entry.anchor + 1}`)
+            + '\nClick to open it';
+        } else if (entry.anchor == null) {
           row.title = `${d.name}\nProduced by this session. Click to open it.`;
         } else {
           row.title = d.onDisk
@@ -1739,12 +1920,15 @@
      * what the hollow marker does. Both are stated in the row's tooltip.
      */
     if (entry.kind === 'doc') {
-      // Cowork holds its own button, since it has no anchor to fall back to.
-      if (entry.anchor == null) {
-        const el = entry.doc.el;
-        if (el && document.body.contains(el)) el.click();
-        return;
-      }
+      /*
+       * Cowork rows carry their own button from the Outputs panel. Keyed off
+       * the button, not off a missing anchor: cowork files are anchored now,
+       * and testing for a null anchor would have quietly sent every one of
+       * them down the chat path.
+       */
+      const own = entry.doc.el;
+      if (own && document.body.contains(own)) { own.click(); return; }
+      if (entry.anchor == null) return;
       if (entry.doc.onDisk && openArtifact(entry.doc.name)) return;
       const target = rows.findIndex((r) => r.entry.kind === 'q' && r.entry.qi === entry.anchor);
       if (target !== -1) return jumpTo(target);
@@ -1819,15 +2003,19 @@
    * questions in a session only ever grow at the end.
    */
   let coworkQuestions = [];
+  let coworkWrites = new Map();
+  let coworkEvents = [];
   let coworkFetchedFor = null;
   let coworkFetching = false;
 
   function loadCoworkQuestions(sessionId) {
     if (coworkFetching || coworkFetchedFor === sessionId) return;
     coworkFetching = true;
-    fetchCoworkQuestions(sessionId, (partial) => {
+    fetchCoworkSession(sessionId, (partial, writes, events) => {
       // Still on the same session? A fast click away must not repaint the rail.
       if (currentRoute !== 'cowork:' + sessionId) return;
+      coworkWrites = writes;
+      coworkEvents = events;
       if (partial.length <= questions.length) return;
       coworkQuestions = partial;
       questions = partial;
@@ -1836,9 +2024,15 @@
     })
       .then((all) => {
         if (currentRoute !== 'cowork:' + sessionId) return;
-        coworkQuestions = all;
+        coworkQuestions = all.questions;
+        coworkWrites = all.writes;
+        coworkEvents = all.events;
         coworkFetchedFor = sessionId;
-        if (all.length) { questions = all; domSignature = ''; render(); }
+        if (all.questions.length) {
+          questions = all.questions;
+          domSignature = '';
+          render();
+        }
       })
       .catch((e) => {
         console.warn('[Claude Prompt Navigator] Cowork event walk failed, '
@@ -1861,7 +2055,10 @@
        * sit together at the end of the rail in the order the panel lists them,
        * which is the order they were created.
        */
-      documents = out.files.map((f) => ({ name: f.name, onDisk: true, el: f.el }));
+      documents = out.files.map((f) => ({
+        name: f.name, onDisk: true, el: f.el,
+        seq: coworkWrites.has(artifactKey(f.name)) ? coworkWrites.get(artifactKey(f.name)) : null,
+      }));
       convChars = 0;
       domSignature = questions.map((q) => q.key).join('|')
         + '#' + out.count + '#' + out.files.map((f) => f.name).join('|');
@@ -1951,7 +2148,11 @@
          */
         questions = coworkQuestions.length ? coworkQuestions : fresh;
         coworkDocCount = out.count;
-        documents = out.files.map((f) => ({ name: f.name, onDisk: true, el: f.el }));
+        documents = out.files.map((f) => ({
+          name: f.name, onDisk: true, el: f.el,
+          seq: coworkWrites.has(artifactKey(f.name))
+            ? coworkWrites.get(artifactKey(f.name)) : null,
+        }));
         activeIndex = -1;
         render();
       } else if (questions.length) {
