@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Prompt Navigator
 // @namespace    local.deepith
-// @version      3.9.3
+// @version      3.9.4
 // @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it reads the session event log for the same complete list, and shows the files that session produced.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -360,27 +360,43 @@
    * chat to read one question makes the thing you are navigating harder to
    * see, and the card does not need the help.
    */
+  /*
+   * A column, so the heading can stay put.
+   *
+   * The card used to scroll as one block, which carried "Question 8 of 24" off
+   * the top the moment a long prompt was scrolled, exactly when you most want
+   * to know which question you are reading. The card clips, the body scrolls,
+   * and the heading sits outside the scrolling part.
+   */
   .cpn-peek {
     position: fixed; z-index: 2147483001;
-    width: min(560px, 46vw); padding: 16px 18px 14px;
+    width: min(560px, 46vw);
+    display: flex; flex-direction: column;
     background: #232220; color: #ece9e3;
     border: 1px solid rgba(150,145,135,0.28); border-radius: 10px;
     box-shadow: 0 16px 48px rgba(0,0,0,0.62);
     font: 14px/1.62 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-    max-height: min(62vh, 560px); overflow-y: auto; overscroll-behavior: contain;
-    white-space: pre-wrap; overflow-wrap: anywhere;
+    max-height: min(62vh, 560px); overflow: hidden;
   }
-  .cpn-peek::-webkit-scrollbar { width: 8px; }
-  .cpn-peek::-webkit-scrollbar-thumb { background: #56524b; border-radius: 4px; }
 
   .cpn-peek-head {
+    flex: 0 0 auto;
     display: flex; align-items: baseline; gap: 8px;
-    margin: -2px 0 9px; padding-bottom: 8px;
+    padding: 13px 18px 9px;
     border-bottom: 1px solid rgba(150,145,135,0.22);
     font-size: 11px; letter-spacing: .07em; text-transform: uppercase;
     color: #a8a29a; white-space: nowrap;
   }
   .cpn-peek-head b { color: #e08b6a; font-weight: 600; font-size: 12px; letter-spacing: 0; }
+
+  .cpn-peek-body {
+    flex: 1 1 auto; min-height: 0;          /* or the flex child refuses to scroll */
+    overflow-y: auto; overscroll-behavior: contain;
+    padding: 11px 18px 14px;
+    white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .cpn-peek-body::-webkit-scrollbar { width: 8px; }
+  .cpn-peek-body::-webkit-scrollbar-thumb { background: #56524b; border-radius: 4px; }
 
   @media (prefers-color-scheme: light) {
     .cpn-peek {
@@ -388,7 +404,7 @@
       border-color: rgba(60,55,45,0.16);
       box-shadow: 0 16px 48px rgba(60,50,35,0.24);
     }
-    .cpn-peek::-webkit-scrollbar-thumb { background: #c9c4bb; }
+    .cpn-peek-body::-webkit-scrollbar-thumb { background: #c9c4bb; }
     .cpn-peek-head { color: #6b665e; border-bottom-color: rgba(60,55,45,0.14); }
     .cpn-peek-head b { color: #c25f3e; }
   }
@@ -2104,9 +2120,15 @@
     head.append(num, of);
     peek.appendChild(head);
 
-    // The full prompt. The old card stopped at 1200 characters, which cut your
-    // longer briefs in half; it scrolls now instead of truncating.
-    peek.appendChild(document.createTextNode(item.text));
+    /*
+     * The full prompt, in its own scrolling box below the fixed heading. The
+     * old card stopped at 1200 characters, which cut the longer briefs in
+     * half; it scrolls now instead of truncating.
+     */
+    const bodyEl = document.createElement('div');
+    bodyEl.className = 'cpn-peek-body';
+    bodyEl.textContent = item.text;
+    peek.appendChild(bodyEl);
 
     // The card keeps itself alive while you are on it, so a long prompt can be
     // read and scrolled rather than only glanced at.
