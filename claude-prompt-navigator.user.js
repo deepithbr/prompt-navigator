@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Claude Prompt Navigator
 // @namespace    local.deepith
-// @version      3.6.3
-// @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it falls back to the messages on screen, and lists the files that session produced from its Outputs panel.
+// @version      3.7.0
+// @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it reads the session event log for the same complete list, and shows the files that session produced.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
 //               see LICENSE. Not open source, not for redistribution.
@@ -789,6 +789,90 @@
     return { files, collapsed, count: count || files.length };
   }
 
+  /* ------------------------------------------------------------------ *
+   * Cowork questions
+   * ------------------------------------------------------------------ *
+   *
+   * Cowork does have an API. It is just not the one chat uses, which is why
+   * earlier probing under /api/organizations/{org}/cowork/... found nothing
+   * but 404s and this fell back to reading the page. The real surface is
+   *
+   *     /v1/code/sessions/{cse}/events
+   *
+   * and it needs an `anthropic-version` header or it answers 400. It pages
+   * newest first, 500 events a page, and carries `next_cursor` until the
+   * sequence numbers reach 1.
+   *
+   * Telling a human turn from a tool result matters here, because both are
+   * `event_type: "user"`. The discriminator is `source`: `client` is you,
+   * `worker` is a tool handing back its output. A human turn also carries its
+   * text as a plain string, where a tool result carries an array of blocks.
+   */
+  const COWORK_HEADERS = {
+    accept: 'application/json',
+    'anthropic-version': '2023-06-01',
+  };
+
+  /*
+   * Two things ride along inside a human turn that you did not type. The
+   * timezone reminder the client injects is a whole message and is dropped.
+   * An upload wrapper sits around a real message and is unwrapped, falling
+   * back to the file names when the upload carried no words of its own.
+   */
+  function cleanCoworkText(raw) {
+    let t = String(raw || '');
+    if (/^\s*<system-reminder>/.test(t)) return '';
+    t = t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, ' ');
+    const uploads = t.match(/<file_path>([^<]+)<\/file_path>/g);
+    t = t.replace(/<uploaded_files>[\s\S]*?<\/uploaded_files>/g, ' ');
+    t = norm(t);
+    if (!t && uploads) {
+      const names = uploads
+        .map((m) => m.replace(/<\/?file_path>/g, '').split(/[\\/]/).pop())
+        .filter(Boolean);
+      if (names.length) t = 'Uploaded ' + names.join(', ');
+    }
+    return t;
+  }
+
+  const MAX_EVENT_PAGES = 20;   // ~10k events; a backstop, not a real limit
+
+  /*
+   * onPage is called with the questions found so far after every page, so the
+   * rail fills in as the walk proceeds rather than sitting empty until the end.
+   * A long session is several megabytes of mostly tool output, and there is no
+   * server-side filter for that: limit is honoured, event type filters are not.
+   */
+  async function fetchCoworkQuestions(sessionId, onPage) {
+    const events = [];
+    let cursor = null;
+    for (let page = 0; page < MAX_EVENT_PAGES; page++) {
+      const url = `/v1/code/sessions/${sessionId}/events?limit=500`
+        + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : '');
+      const res = await fetch(url, { headers: COWORK_HEADERS });
+      if (!res.ok) break;
+      const body = await res.json();
+      const batch = body && body.data ? body.data : [];
+      events.push(...batch);
+      if (onPage) onPage(coworkQuestionsFrom(events));
+      if (!body.next_cursor || !batch.length) break;
+      cursor = body.next_cursor;
+    }
+    return coworkQuestionsFrom(events);
+  }
+
+  function coworkQuestionsFrom(events) {
+    const seen = new Set();
+    return events
+      .filter((e) => e.event_type === 'user' && e.source === 'client')
+      .filter((e) => e.payload && e.payload.message
+        && typeof e.payload.message.content === 'string')
+      .sort((a, b) => Number(a.sequence_num) - Number(b.sequence_num))
+      .map((e) => ({ seq: Number(e.sequence_num), text: cleanCoworkText(e.payload.message.content) }))
+      .filter((q) => q.text && !seen.has(q.seq) && seen.add(q.seq))
+      .map((q, i) => ({ n: i + 1, uuid: null, text: q.text, key: keyOf(q.text), seq: q.seq }));
+  }
+
   // Used only when the API is unreachable.
   function questionsFromDom() {
     for (const sel of MESSAGE_SELECTORS) {
@@ -1526,10 +1610,17 @@
       const docs = coworkDocCount
         ? ` · ${coworkDocCount} output${coworkDocCount === 1 ? '' : 's'}`
         : '';
-      headCount.textContent = `${questions.length} on screen${docs}`;
-      headCount.title = 'Cowork has no conversation API, so the questions are '
-        + 'whatever the page has mounted. The outputs are read from the session\'s '
-        + 'Outputs panel and cover the whole session, not just what is on screen.';
+      // "on screen" is only honest while the walk has not landed. Once it has,
+      // this is the whole session and saying otherwise undersells it.
+      const full = coworkQuestions.length > 0;
+      headCount.textContent = full
+        ? `${questions.length} question${questions.length === 1 ? '' : 's'}${docs}`
+        : `${questions.length} on screen${docs}`;
+      headCount.title = full
+        ? 'Every question in this session, read from its event log. The outputs '
+          + 'come from the Outputs panel.'
+        : 'Reading the session event log. Until it lands these are only the '
+          + 'messages the page has mounted.';
     } else {
       const q = `${questions.length} question${questions.length === 1 ? '' : 's'}`;
       headCount.textContent = documents.length
@@ -1722,9 +1813,45 @@
   let domSignature = '';
   let loading = false;
 
+  /*
+   * The event walk is per session and runs once. Several megabytes of mostly
+   * tool output is not something to repeat on every DOM mutation, and the
+   * questions in a session only ever grow at the end.
+   */
+  let coworkQuestions = [];
+  let coworkFetchedFor = null;
+  let coworkFetching = false;
+
+  function loadCoworkQuestions(sessionId) {
+    if (coworkFetching || coworkFetchedFor === sessionId) return;
+    coworkFetching = true;
+    fetchCoworkQuestions(sessionId, (partial) => {
+      // Still on the same session? A fast click away must not repaint the rail.
+      if (currentRoute !== 'cowork:' + sessionId) return;
+      if (partial.length <= questions.length) return;
+      coworkQuestions = partial;
+      questions = partial;
+      domSignature = '';           // force the next tick to rebuild cleanly
+      render();
+    })
+      .then((all) => {
+        if (currentRoute !== 'cowork:' + sessionId) return;
+        coworkQuestions = all;
+        coworkFetchedFor = sessionId;
+        if (all.length) { questions = all; domSignature = ''; render(); }
+      })
+      .catch((e) => {
+        console.warn('[Claude Prompt Navigator] Cowork event walk failed, '
+          + 'falling back to the messages on screen:', e.message);
+      })
+      .finally(() => { coworkFetching = false; });
+  }
+
   async function load(r) {
     if (r.mode === 'cowork') {
-      questions = questionsFromDom();
+      // Whatever is mounted goes up straight away, so the rail is never blank
+      // while the event walk runs. The walk then replaces it with the full list.
+      questions = coworkQuestions.length ? coworkQuestions : questionsFromDom();
       const out = coworkOutputs();
       coworkDocCount = out.count;
       /*
@@ -1741,6 +1868,7 @@
       activeIndex = -1;
       await fetchUsage();
       render();
+      loadCoworkQuestions(r.id);
       return;
     }
     if (loading) return;
@@ -1793,6 +1921,7 @@
       mode = r ? r.mode : 'chat';
       questions = [];
       documents = [];
+      if (coworkFetchedFor !== (r ? r.id : null)) coworkQuestions = [];
       convChars = 0;
       convModel = null;
       convEffort = null;
@@ -1814,7 +1943,13 @@
         + '#' + out.count + '#' + out.files.map((f) => f.name).join('|');
       if (sig !== domSignature) {
         domSignature = sig;
-        questions = fresh;
+        /*
+         * Once the event walk has run, its list is the whole session and the
+         * mounted messages are a two-item subset of it. Overwriting the full
+         * list with that subset is exactly the bug this path used to have.
+         * The DOM is still read, but only to work out what is on screen.
+         */
+        questions = coworkQuestions.length ? coworkQuestions : fresh;
         coworkDocCount = out.count;
         documents = out.files.map((f) => ({ name: f.name, onDisk: true, el: f.el }));
         activeIndex = -1;
