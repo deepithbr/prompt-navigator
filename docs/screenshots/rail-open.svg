@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="600" viewBox="0 0 1200 600" role="img" aria-label="A Claude chat with the Prompt Navigator rail open on the right, listing ten questions with the files they produced">
+  <style>
+    .ui   { font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    .mono { font-family: Consolas, "SF Mono", Menlo, monospace; }
+    .ans  { fill: #b9b5ae; font-size: 13.5px; }
+    .cue  { fill: #e08b6a; font-size: 12.5px; }
+    .lab  { fill: #e6e4df; font-size: 12px; }
+    .dim  { fill: #e6e4df; opacity: .6; font-size: 10.5px; }
+    .num  { fill: #e6e4df; opacity: .45; font-size: 11px; }
+    .doc  { fill: #e6e4df; opacity: .72; font-size: 12px; }
+  </style>
+
+  <rect width="1200" height="600" fill="#1f1e1d"/>
+
+  <!-- window chrome -->
+  <line x1="0" y1="48" x2="1200" y2="48" stroke="#302f2d" stroke-width="1"/>
+  <text class="ui" x="24" y="30" font-size="13" fill="#a3a09a">Bakery</text>
+  <text class="ui" x="76" y="30" font-size="13" fill="#63605b">/</text>
+  <text class="ui" x="90" y="30" font-size="13" font-weight="600" fill="#e8e6e1">Opening a bakery in March</text>
+
+  <!-- your message -->
+  <rect x="372" y="86" width="452" height="38" rx="11" fill="#2f2e2c"/>
+  <text class="ui" x="388" y="110" font-size="13.5" fill="#e8e6e1">What goes wrong most often in the first month? Be blunt about it.</text>
+
+  <!-- reply -->
+  <text class="mono cue" x="40" y="158">Three things account for most first-month failures.</text>
+  <text class="ui ans" x="40" y="180">Understaffing the second week, because the soft opening flatters</text>
+  <text class="ui ans" x="40" y="202">your numbers. Ordering to a forecast rather than to yesterday. And</text>
+  <text class="ui ans" x="40" y="224">a card terminal nobody tested on a Saturday queue.</text>
+
+  <!-- your message -->
+  <rect x="424" y="252" width="400" height="38" rx="11" fill="#2f2e2c"/>
+  <text class="ui" x="440" y="276" font-size="13.5" fill="#e8e6e1">Write the staff rota for launch week, six people, two shifts.</text>
+
+  <!-- reply -->
+  <text class="mono cue" x="40" y="324">Rota written to launch_week_rota.pdf.</text>
+  <text class="ui ans" x="40" y="346">Two shifts, six people, with the Saturday double-staffed from ten.</text>
+
+  <!-- ================= the rail ================= -->
+  <rect x="920" y="110" width="254" height="374" rx="10" fill="#201f1e"/>
+
+  <text class="ui" x="926" y="134" font-size="11.5" fill="#e6e4df" opacity=".85">10 questions · 5 docs</text>
+  <text class="ui" x="1168" y="135" font-size="14" fill="#e6e4df" opacity=".6" text-anchor="end">⌕  ⤓  ⎘  ◉</text>
+
+  <text class="ui dim" x="926" y="153">Opus 5 · high effort</text>
+  <text class="ui dim" x="926" y="169">≈ 48K tokens in messages</text>
+
+  <!-- session bar -->
+  <text class="ui dim" x="926" y="188">Session 34%</text>
+  <rect x="1006" y="180" width="110" height="9" rx="4.5" fill="none" stroke="#787877"/>
+  <rect x="1007" y="181" width="37" height="7" rx="3.5" fill="#2c84db"/>
+  <rect x="1063" y="181" width="2" height="7" fill="#ffffff"/>
+  <text class="ui" x="1168" y="188" font-size="10.5" fill="#e6e4df" opacity=".4" text-anchor="end">3h 10m</text>
+
+  <!-- weekly bar -->
+  <text class="ui dim" x="926" y="205">Weekly 21%</text>
+  <rect x="1006" y="197" width="110" height="9" rx="4.5" fill="none" stroke="#787877"/>
+  <rect x="1007" y="198" width="23" height="7" rx="3.5" fill="#2c84db"/>
+  <rect x="1048" y="198" width="2" height="7" fill="#ffffff"/>
+  <text class="ui" x="1168" y="205" font-size="10.5" fill="#e6e4df" opacity=".4" text-anchor="end">4d 6h</text>
+
+  <line x1="926" y1="216" x2="1168" y2="216" stroke="#8c877d" stroke-opacity=".22"/>
+
+  <!-- rows: tick, number, label. Documents carry a diamond and sit under the
+       question that produced them. -->
+  <g>
+    <rect x="926" y="234" width="12" height="2" rx="1" fill="#8d8880" opacity=".55"/>
+    <text class="mono num" x="946" y="239">1</text>
+    <text class="ui lab" x="958" y="239" opacity=".92">We are opening a small bakery in…</text>
+
+    <rect x="926" y="251" width="12" height="2" rx="1" fill="#8d8880" opacity=".55"/>
+    <text class="mono num" x="946" y="256">2</text>
+    <text class="ui lab" x="958" y="256" opacity=".92">Costs first. What does a 40 cover…</text>
+
+    <rect x="926" y="268" width="12" height="2" rx="1" fill="#8d8880" opacity=".55"/>
+    <text class="mono num" x="946" y="273">3</text>
+    <text class="ui lab" x="958" y="273" opacity=".92">Give me the equipment list as a…</text>
+
+    <rect x="926" y="285" width="12" height="2" rx="1" fill="#5b9dbb"/>
+    <text x="946" y="290" font-size="10" fill="#5b9dbb">◆</text>
+    <text class="ui doc" x="960" y="290">equipment_list.xlsx</text>
+
+    <rect x="926" y="302" width="12" height="2" rx="1" fill="#8d8880" opacity=".55"/>
+    <text class="mono num" x="946" y="307">4</text>
+    <text class="ui lab" x="958" y="307" opacity=".92">The pricing feels low. Walk me…</text>
+
+    <rect x="926" y="319" width="12" height="2" rx="1" fill="#5b9dbb"/>
+    <text x="946" y="324" font-size="10" fill="#5b9dbb">◆</text>
+    <text class="ui doc" x="960" y="324">margin_model.xlsx</text>
+
+    <rect x="926" y="336" width="12" height="2" rx="1" fill="#8d8880" opacity=".55"/>
+    <text class="mono num" x="946" y="341">5</text>
+    <text class="ui lab" x="958" y="341" opacity=".92">Can we do a soft opening for two…</text>
+
+    <!-- the question you are currently on -->
+    <rect x="922" y="348" width="246" height="17" rx="5" fill="#8c877d" fill-opacity=".18"/>
+    <rect x="926" y="353" width="12" height="2" rx="1" fill="#d97757"/>
+    <text class="mono num" x="946" y="358">6</text>
+    <text class="ui lab" x="958" y="358">What goes wrong most often in…</text>
+
+    <rect x="926" y="370" width="12" height="2" rx="1" fill="#8d8880" opacity=".55"/>
+    <text class="mono num" x="946" y="375">7</text>
+    <text class="ui lab" x="958" y="375" opacity=".92">Write the staff rota for launch…</text>
+
+    <rect x="926" y="387" width="12" height="2" rx="1" fill="#5b9dbb"/>
+    <text x="946" y="392" font-size="10" fill="#5b9dbb">◆</text>
+    <text class="ui doc" x="960" y="392">launch_week_rota.pdf</text>
+
+    <rect x="926" y="404" width="12" height="2" rx="1" fill="#8d8880" opacity=".55"/>
+    <text class="mono num" x="946" y="409">8</text>
+    <text class="ui lab" x="958" y="409" opacity=".92">I want a one page brief for the…</text>
+
+    <rect x="926" y="421" width="12" height="2" rx="1" fill="#5b9dbb"/>
+    <text x="946" y="426" font-size="10" fill="#5b9dbb">◆</text>
+    <text class="ui doc" x="960" y="426">landlord_brief.pdf</text>
+
+    <rect x="926" y="438" width="12" height="2" rx="1" fill="#8d8880" opacity=".55"/>
+    <text class="mono num" x="946" y="443">9</text>
+    <text class="ui lab" x="958" y="443" opacity=".92">How much flour do we hold if a…</text>
+
+    <rect x="926" y="455" width="12" height="2" rx="1" fill="#8d8880" opacity=".55"/>
+    <text class="mono num" x="944" y="460">10</text>
+    <text class="ui lab" x="960" y="460" opacity=".92">Put the whole thing into a…</text>
+
+    <rect x="926" y="472" width="12" height="2" rx="1" fill="#5b9dbb"/>
+    <text x="946" y="477" font-size="10" fill="#5b9dbb">◆</text>
+    <text class="ui doc" x="960" y="477">opening_checklist.md</text>
+  </g>
+</svg>

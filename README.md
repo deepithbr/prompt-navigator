@@ -6,6 +6,10 @@ Ships with a companion meter for ChatGPT that shows your agent and task allowanc
 
 Works as a Chrome extension or as two Tampermonkey userscripts. The files are the same either way.
 
+![The rail open on a Claude chat, listing every question in the thread with the files each one produced](docs/screenshots/rail-open.svg)
+
+*Interface drawn from the shipped stylesheet, with a demo conversation standing in for a real one. No account data appears in this repository.*
+
 ---
 
 ## What it shows
