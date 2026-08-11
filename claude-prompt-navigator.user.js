@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Prompt Navigator
 // @namespace    local.deepith
-// @version      3.9.2
+// @version      3.9.3
 // @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it reads the session event log for the same complete list, and shows the files that session produced.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -1111,8 +1111,10 @@
     if (offset === lastOffset) return;
     lastOffset = offset;
     rail.style.right = offset + 'px';
-    // The card measures itself against the rail in positionPeek, so it is not
-    // placed from here as well. Two owners for one value drift apart.
+    // The card measures itself against the rail in positionPeek rather than
+    // being placed from here as well; two owners for one value drift apart.
+    // It is only told that the rail has moved.
+    repositionPeek();
   }
 
   function scroller() {
@@ -2051,6 +2053,7 @@
   let peekGrace = null;
   let peekHeld = false;      // the cursor is on the card itself
   let peekSticky = false;
+  let peekIndex = -1;        // so it can be re-placed when the layout moves
 
   /*
    * Reaching the card used to be impossible.
@@ -2112,6 +2115,7 @@
 
     document.body.appendChild(peek);
     if (rail) rail.classList.add('cpn-peeking');
+    peekIndex = i;
     positionPeek(i);
     /*
      * Measured twice. The rail's rows animate their width over 160ms, so if
@@ -2128,17 +2132,45 @@
    * measured rather than assumed. The old card used a fixed right: 400px,
    * which put it in a different place every time the rail moved.
    */
+  const PEEK_MAX_W = 560;
+  const PEEK_MIN_W = 260;
+
   function positionPeek(i) {
     if (!peek) return;
     const railBox = rail ? rail.getBoundingClientRect() : null;
     const gap = 14;
-    const right = railBox ? Math.round(window.innerWidth - railBox.left) + gap : 60;
-    peek.style.right = Math.max(gap, right) + 'px';
+    const edge = 12;                       // breathing room at the window edge
+
+    /*
+     * The width is what the space allows, not a constant.
+     *
+     * Opening a document pushes the rail left by the panel's width, and the
+     * card is placed to the left of the rail. At a fixed 560px it ran off the
+     * left edge of the window and the first few words of every line were cut
+     * off. So the room between the window edge and the rail is measured, and
+     * the card takes the smaller of that and its preferred width.
+     */
+    const room = railBox
+      ? Math.round(railBox.left) - gap - edge
+      : window.innerWidth - 2 * edge;
+    const width = Math.max(PEEK_MIN_W, Math.min(PEEK_MAX_W, room));
+    peek.style.width = width + 'px';
+
+    /*
+     * Below the minimum there is genuinely nowhere to the left to put it, so
+     * it stops tracking the rail and pins to the window edge instead. It will
+     * overlap the rail, which is the right trade: an overlapping card can be
+     * read and moved off, a clipped one cannot be read at all.
+     */
+    let right = railBox ? Math.round(window.innerWidth - railBox.left) + gap : 60;
+    const maxRight = window.innerWidth - width - edge;
+    right = Math.min(Math.max(gap, right), Math.max(edge, maxRight));
+    peek.style.right = right + 'px';
 
     const row = rows[i] && rows[i].el.getBoundingClientRect();
     const h = peek.getBoundingClientRect().height;
     const wanted = row ? row.top + row.height / 2 - h / 2 : 80;
-    const top = Math.min(Math.max(12, wanted), Math.max(12, window.innerHeight - h - 12));
+    const top = Math.min(Math.max(edge, wanted), Math.max(edge, window.innerHeight - h - edge));
     peek.style.top = Math.round(top) + 'px';
   }
 
@@ -2148,8 +2180,14 @@
     clearTimeout(peekGrace);
     peekSticky = false;
     peekHeld = false;
+    peekIndex = -1;
     if (rail) rail.classList.remove('cpn-peeking');
     if (peek) { peek.remove(); peek = null; }
+  }
+
+  /* Opening or closing a document moves the rail, so the card follows it. */
+  function repositionPeek() {
+    if (peek && peekIndex >= 0) positionPeek(peekIndex);
   }
 
   /*
