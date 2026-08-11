@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Prompt Navigator
 // @namespace    local.deepith
-// @version      3.9.0
+// @version      3.9.1
 // @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it reads the session event log for the same complete list, and shows the files that session produced.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -348,22 +348,11 @@
   /*
    * The preview card, shown on hover.
    *
-   * It used to be a 420px translucent card at a hard-coded right: 400px, with
-   * the page showing through it. At 13px over live chat text it was there but
-   * not readable, which is the whole job. It is now opaque, wider, set at a
-   * reading size, and it dims the page behind it.
-   *
-   * The scrim takes pointer-events: none. A backdrop that swallowed clicks
-   * would break the rail underneath it, and the rail is what you are pointing
-   * at when the card is up.
+   * It is opaque and carries its own shadow, which is what makes it readable.
+   * It does not dim the page. A scrim was tried and removed: darkening the
+   * chat to read one question makes the thing you are navigating harder to
+   * see, and the card does not need the help.
    */
-  .cpn-scrim {
-    position: fixed; inset: 0; z-index: 2147483000;
-    background: rgba(0,0,0,0.42); pointer-events: none;
-    opacity: 0; transition: opacity 120ms ease;
-  }
-  .cpn-scrim.cpn-scrim-on { opacity: 1; }
-
   .cpn-peek {
     position: fixed; z-index: 2147483001;
     width: min(560px, 46vw); padding: 16px 18px 14px;
@@ -385,10 +374,8 @@
     color: #a8a29a; white-space: nowrap;
   }
   .cpn-peek-head b { color: #e08b6a; font-weight: 600; font-size: 12px; letter-spacing: 0; }
-  .cpn-peek-note { margin-top: 11px; font-size: 12px; line-height: 1.5; color: #a8a29a; }
 
   @media (prefers-color-scheme: light) {
-    .cpn-scrim { background: rgba(40,36,30,0.28); }
     .cpn-peek {
       background: #fffefc; color: #262420;
       border-color: rgba(60,55,45,0.16);
@@ -397,7 +384,6 @@
     .cpn-peek::-webkit-scrollbar-thumb { background: #c9c4bb; }
     .cpn-peek-head { color: #6b665e; border-bottom-color: rgba(60,55,45,0.14); }
     .cpn-peek-head b { color: #c25f3e; }
-    .cpn-peek-note { color: #6b665e; }
   }
   `;
 
@@ -834,12 +820,23 @@
      * not see pseudo-elements at all. The PUA strip is belt and braces in case
      * a future icon is a real child node.
      */
+    /*
+     * Deduplicated by name. Claude's own panel repeats a file that was written
+     * more than once: on the C09 session it listed
+     * BSCCMT102_C09_Discussion_Record.md twice and counted five outputs for
+     * four files. The first button is kept, so clicking still opens it.
+     *
+     * The count reported is what the rail actually shows, not the panel's,
+     * because a header saying five above four rows is the kind of small lie
+     * that makes everything else look untrustworthy.
+     */
+    const seen = new Set();
     const files = [...header.parentElement.querySelectorAll('button')]
       .filter((b) => !header.contains(b))
       .map((b) => ({ name: norm((b.textContent || '').replace(ICON_GLYPH, '')), el: b }))
-      .filter((f) => f.name);
+      .filter((f) => f.name && !seen.has(f.name) && seen.add(f.name));
 
-    return { files, collapsed, count: count || files.length };
+    return { files, collapsed, count: files.length || count };
   }
 
   /* ------------------------------------------------------------------ *
@@ -1885,7 +1882,12 @@
       } else {
         const item = entry.q;
         row.className = 'cpn-item';
-        row.title = item.text.slice(0, 400);
+        /*
+         * No title attribute. The browser's own tooltip fired alongside the
+         * preview card and drew the same text a second time, in a band across
+         * the page, which is what made hovering look broken. The card is the
+         * one place this text belongs.
+         */
         const short = item.text.length > CONFIG.labelChars
           ? item.text.slice(0, CONFIG.labelChars).trimEnd() + '…'
           : item.text;
@@ -2005,10 +2007,12 @@
     // a loop that keeps scrolling to hunt for a message locks the tab up for
     // several seconds. Testing on a 14 question thread showed the target
     // almost never mounts from a scripted scroll anyway. Only real scrolling
-    // reliably loads it, which is what the note on the card tells you.
+    // reliably loads it.
+    //
     // Sticky: a click means you meant it, so this one does not vanish when the
-    // cursor moves off the row the way the hover preview does.
-    showPeek(i, { mounted: false, sticky: true });
+    // cursor moves off the row the way the hover preview does. It gives you
+    // the text to look for while you scroll the last stretch by hand.
+    showPeek(i, { sticky: true });
 
     const sc = scroller();
     if (sc && questions.length > 1) {
@@ -2023,13 +2027,13 @@
   }
 
   /*
-   * The whole prompt, on hover.
+   * The whole prompt, on hover. The question only, not the reply: reading the
+   * thread happens in the thread, which is what the click is for.
    *
-   * `mounted` says whether the message is actually in the page. When it is
-   * not, the card says so, because otherwise a click that lands approximately
-   * looks broken rather than explained.
+   * There is no note about the message not being loaded. It appeared on every
+   * jump into an older part of a thread, which is most of them, and a warning
+   * that fires almost every time is wallpaper rather than information.
    */
-  let peekScrim = null;
   let peekTimer = null;
   let peekHideTimer = null;
   let peekSticky = false;
@@ -2040,12 +2044,6 @@
     peekSticky = !!o.sticky;
     const item = entries[i] && entries[i].q;
     if (!item) return;
-
-    peekScrim = document.createElement('div');
-    peekScrim.className = 'cpn-scrim';
-    document.body.appendChild(peekScrim);
-    // Next frame, or the transition has nothing to move from.
-    requestAnimationFrame(() => peekScrim && peekScrim.classList.add('cpn-scrim-on'));
 
     peek = document.createElement('div');
     peek.className = 'cpn-peek';
@@ -2062,15 +2060,6 @@
     // The full prompt. The old card stopped at 1200 characters, which cut your
     // longer briefs in half; it scrolls now instead of truncating.
     peek.appendChild(document.createTextNode(item.text));
-
-    if (o.mounted === false) {
-      const note = document.createElement('div');
-      note.className = 'cpn-peek-note';
-      note.textContent = 'Claude has not loaded this part of the chat into the page, '
-        + 'so clicking lands nearby rather than exactly. Scroll up a little and it '
-        + 'will appear.';
-      peek.appendChild(note);
-    }
 
     document.body.appendChild(peek);
     positionPeek(i);
@@ -2101,7 +2090,6 @@
     clearTimeout(peekHideTimer);
     peekSticky = false;
     if (peek) { peek.remove(); peek = null; }
-    if (peekScrim) { peekScrim.remove(); peekScrim = null; }
   }
 
   /*
@@ -2131,8 +2119,7 @@
     peekTimer = setTimeout(() => {
       const entry = entries[i];
       if (!entry || entry.kind !== 'q') return;
-      const mounted = !!(rows[i] && rows[i].node);
-      showPeek(i, { mounted });
+      showPeek(i);
     }, PEEK_DELAY_MS);
   }
 
