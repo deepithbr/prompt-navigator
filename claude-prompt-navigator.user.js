@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Prompt Navigator
 // @namespace    local.deepith
-// @version      3.9.1
+// @version      3.9.2
 // @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it reads the session event log for the same complete list, and shows the files that session produced.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -140,7 +140,7 @@
     border-radius: 10px;
     transition: background 140ms ease, box-shadow 140ms ease, right 140ms ease;
   }
-  .cpn-rail:hover, .cpn-rail.cpn-pinned {
+  .cpn-rail:hover, .cpn-rail.cpn-pinned, .cpn-rail.cpn-peeking {
     background: rgba(32,31,29,0.95);
     box-shadow: 0 4px 24px rgba(0,0,0,0.45);
   }
@@ -154,14 +154,16 @@
   /* Collapsed, the rail is only about 22px wide, so a scrollbar would eat the
      tick column. It appears once the rail is open. */
   .cpn-list::-webkit-scrollbar { width: 0; }
-  .cpn-rail:hover .cpn-list, .cpn-rail.cpn-pinned .cpn-list { scrollbar-width: thin; }
+  .cpn-rail:hover .cpn-list, .cpn-rail.cpn-pinned .cpn-list,
+  .cpn-rail.cpn-peeking .cpn-list { scrollbar-width: thin; }
   .cpn-rail:hover .cpn-list::-webkit-scrollbar,
   .cpn-rail.cpn-pinned .cpn-list::-webkit-scrollbar { width: 6px; }
   .cpn-list::-webkit-scrollbar-thumb { background: #5a5750; border-radius: 3px; }
 
   @media (prefers-color-scheme: light) {
     .cpn-rail { color: #2b2924; }
-    .cpn-rail:hover, .cpn-rail.cpn-pinned { background: rgba(252,251,249,0.97); }
+    .cpn-rail:hover, .cpn-rail.cpn-pinned,
+    .cpn-rail.cpn-peeking { background: rgba(252,251,249,0.97); }
     .cpn-list::-webkit-scrollbar-thumb { background: #c4c0b8; }
   }
 
@@ -179,7 +181,8 @@
     display: flex; flex-direction: column; align-items: stretch; gap: 3px;
     opacity: 0; height: 0; width: 0; min-width: 0; overflow: hidden;
   }
-  .cpn-rail:hover .cpn-head, .cpn-rail.cpn-pinned .cpn-head {
+  .cpn-rail:hover .cpn-head, .cpn-rail.cpn-pinned .cpn-head,
+  .cpn-rail.cpn-peeking .cpn-head {
     /* Only when open. A min-width on the collapsed header would widen the
        whole rail and destroy the 22px tick strip. */
     opacity: 1; height: auto; width: auto; min-width: 210px;
@@ -259,7 +262,8 @@
     cursor: pointer; border-radius: 5px; padding: 1px 3px;
     max-width: 18px; transition: max-width 160ms ease, background 120ms ease;
   }
-  .cpn-rail:hover .cpn-item, .cpn-rail.cpn-pinned .cpn-item { max-width: 360px; }
+  .cpn-rail:hover .cpn-item, .cpn-rail.cpn-pinned .cpn-item,
+  .cpn-rail.cpn-peeking .cpn-item { max-width: 360px; }
   .cpn-item:hover { background: rgba(140,135,125,0.18); }
 
   .cpn-tick {
@@ -273,7 +277,8 @@
   .cpn-item.cpn-active .cpn-tick { background: #d97757; opacity: 1; width: 17px; }
 
   .cpn-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0; transition: opacity 120ms ease; }
-  .cpn-rail:hover .cpn-label, .cpn-rail.cpn-pinned .cpn-label { opacity: .92; }
+  .cpn-rail:hover .cpn-label, .cpn-rail.cpn-pinned .cpn-label,
+  .cpn-rail.cpn-peeking .cpn-label { opacity: .92; }
   .cpn-item.cpn-active .cpn-label { color: #d97757; }
   .cpn-num { opacity: .45; margin-right: 5px; font-variant-numeric: tabular-nums; }
 
@@ -281,12 +286,14 @@
   .cpn-item.cpn-doc .cpn-tick { background: #5b9dbb; width: 7px; margin-left: 5px; opacity: .8; }
   .cpn-item.cpn-doc:hover .cpn-tick { width: 10px; opacity: 1; }
   .cpn-item.cpn-doc .cpn-label { opacity: 0; font-size: 11.5px; }
-  .cpn-rail:hover .cpn-doc .cpn-label, .cpn-rail.cpn-pinned .cpn-doc .cpn-label { opacity: .72; }
+  .cpn-rail:hover .cpn-doc .cpn-label, .cpn-rail.cpn-pinned .cpn-doc .cpn-label,
+  .cpn-rail.cpn-peeking .cpn-doc .cpn-label { opacity: .72; }
   .cpn-doc-icon { color: #5b9dbb; margin-right: 5px; }
   /* Hollow marker: created in this chat, but the sandbox no longer holds it. */
   .cpn-item.cpn-gone .cpn-tick { background: transparent; box-shadow: inset 0 0 0 1px #5b9dbb; height: 4px; }
   .cpn-item.cpn-gone .cpn-label { font-style: italic; }
-  .cpn-rail:hover .cpn-gone .cpn-label, .cpn-rail.cpn-pinned .cpn-gone .cpn-label { opacity: .55; }
+  .cpn-rail:hover .cpn-gone .cpn-label, .cpn-rail.cpn-pinned .cpn-gone .cpn-label,
+  .cpn-rail.cpn-peeking .cpn-gone .cpn-label { opacity: .55; }
 
   /*
    * While a right-hand panel is open there is no room for the open rail.
@@ -1697,8 +1704,11 @@
     // the thread it is telling you about.
     rail.addEventListener('mouseleave', () => {
       clearTimeout(peekTimer);
-      if (!peekSticky) hidePeek();
+      if (!peekSticky) graceHide();
     });
+    // Coming back cancels a pending hide, so drifting off the edge and back
+    // does not throw the card away.
+    rail.addEventListener('mouseenter', () => clearTimeout(peekGrace));
     document.body.appendChild(rail);
     lastOffset = -1;
     syncRailOffset();
@@ -1901,6 +1911,8 @@
       row.addEventListener('click', () => jumpTo(i));
       if (entry.kind === 'q') {
         row.addEventListener('mouseenter', () => armPeek(i));
+        // Only a pending open is cancelled here. An open card is left to the
+        // rail's mouseleave, which gives it the grace period to be reached.
         row.addEventListener('mouseleave', () => clearTimeout(peekTimer));
       } else {
         // A document row has a filename and a tooltip already. Dimming the
@@ -2036,7 +2048,39 @@
    */
   let peekTimer = null;
   let peekHideTimer = null;
+  let peekGrace = null;
+  let peekHeld = false;      // the cursor is on the card itself
   let peekSticky = false;
+
+  /*
+   * Reaching the card used to be impossible.
+   *
+   * The card sits beside the rail, so moving toward it leaves the rail, and
+   * leaving the rail hid the card immediately. It disappeared under the cursor
+   * on the way to it, every time. Nothing hides straight away now: a short
+   * grace period runs instead, and arriving on the card cancels it.
+   *
+   * The rail is also held open for as long as a card is up. Letting it
+   * collapse would have moved its edge about 180px to the right mid-journey,
+   * turning the gap the cursor has to cross into a much wider one.
+   */
+  const PEEK_GRACE_MS = 240;
+
+  function graceHide() {
+    clearTimeout(peekGrace);
+    peekGrace = setTimeout(() => { if (!peekHeld) hidePeek(); }, PEEK_GRACE_MS);
+  }
+
+  function holdPeek() {
+    peekHeld = true;
+    clearTimeout(peekGrace);
+    clearTimeout(peekHideTimer);   // a card being read does not time out
+  }
+
+  function releasePeek() {
+    peekHeld = false;
+    graceHide();
+  }
 
   function showPeek(i, opts) {
     const o = opts || {};
@@ -2061,8 +2105,21 @@
     // longer briefs in half; it scrolls now instead of truncating.
     peek.appendChild(document.createTextNode(item.text));
 
+    // The card keeps itself alive while you are on it, so a long prompt can be
+    // read and scrolled rather than only glanced at.
+    peek.addEventListener('mouseenter', holdPeek);
+    peek.addEventListener('mouseleave', releasePeek);
+
     document.body.appendChild(peek);
+    if (rail) rail.classList.add('cpn-peeking');
     positionPeek(i);
+    /*
+     * Measured twice. The rail's rows animate their width over 160ms, so if
+     * the rail was collapsed when the card opened, the first measurement is of
+     * a rail still expanding and the card lands on top of it. The second one,
+     * after the transition, is the real geometry.
+     */
+    setTimeout(() => { if (peek) positionPeek(i); }, 200);
     if (o.sticky) peekHideTimer = setTimeout(hidePeek, 12000);
   }
 
@@ -2088,7 +2145,10 @@
   function hidePeek() {
     clearTimeout(peekTimer);
     clearTimeout(peekHideTimer);
+    clearTimeout(peekGrace);
     peekSticky = false;
+    peekHeld = false;
+    if (rail) rail.classList.remove('cpn-peeking');
     if (peek) { peek.remove(); peek = null; }
   }
 
