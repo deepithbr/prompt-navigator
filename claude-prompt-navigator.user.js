@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Prompt Navigator
 // @namespace    local.deepith
-// @version      3.8.0
+// @version      3.9.0
 // @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it reads the session event log for the same complete list, and shows the files that session produced.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -345,19 +345,60 @@
   .cpn-flash { outline: 2px solid #d97757 !important; outline-offset: 4px; border-radius: 8px; transition: outline-color 600ms ease; }
   .cpn-flash-out { outline-color: transparent !important; }
 
+  /*
+   * The preview card, shown on hover.
+   *
+   * It used to be a 420px translucent card at a hard-coded right: 400px, with
+   * the page showing through it. At 13px over live chat text it was there but
+   * not readable, which is the whole job. It is now opaque, wider, set at a
+   * reading size, and it dims the page behind it.
+   *
+   * The scrim takes pointer-events: none. A backdrop that swallowed clicks
+   * would break the rail underneath it, and the rail is what you are pointing
+   * at when the card is up.
+   */
+  .cpn-scrim {
+    position: fixed; inset: 0; z-index: 2147483000;
+    background: rgba(0,0,0,0.42); pointer-events: none;
+    opacity: 0; transition: opacity 120ms ease;
+  }
+  .cpn-scrim.cpn-scrim-on { opacity: 1; }
+
   .cpn-peek {
-    position: fixed; right: 400px; z-index: 2147483001;
-    max-width: 420px; padding: 12px 14px;
-    background: rgba(32,31,29,0.98); color: #e6e4df;
-    border: 1px solid rgba(140,135,125,0.3); border-radius: 8px;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-    font: 13px/1.5 ui-sans-serif, system-ui, sans-serif;
-    white-space: pre-wrap;
+    position: fixed; z-index: 2147483001;
+    width: min(560px, 46vw); padding: 16px 18px 14px;
+    background: #232220; color: #ece9e3;
+    border: 1px solid rgba(150,145,135,0.28); border-radius: 10px;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.62);
+    font: 14px/1.62 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    max-height: min(62vh, 560px); overflow-y: auto; overscroll-behavior: contain;
+    white-space: pre-wrap; overflow-wrap: anywhere;
   }
+  .cpn-peek::-webkit-scrollbar { width: 8px; }
+  .cpn-peek::-webkit-scrollbar-thumb { background: #56524b; border-radius: 4px; }
+
+  .cpn-peek-head {
+    display: flex; align-items: baseline; gap: 8px;
+    margin: -2px 0 9px; padding-bottom: 8px;
+    border-bottom: 1px solid rgba(150,145,135,0.22);
+    font-size: 11px; letter-spacing: .07em; text-transform: uppercase;
+    color: #a8a29a; white-space: nowrap;
+  }
+  .cpn-peek-head b { color: #e08b6a; font-weight: 600; font-size: 12px; letter-spacing: 0; }
+  .cpn-peek-note { margin-top: 11px; font-size: 12px; line-height: 1.5; color: #a8a29a; }
+
   @media (prefers-color-scheme: light) {
-    .cpn-peek { background: rgba(252,251,249,0.99); color: #2b2924; }
+    .cpn-scrim { background: rgba(40,36,30,0.28); }
+    .cpn-peek {
+      background: #fffefc; color: #262420;
+      border-color: rgba(60,55,45,0.16);
+      box-shadow: 0 16px 48px rgba(60,50,35,0.24);
+    }
+    .cpn-peek::-webkit-scrollbar-thumb { background: #c9c4bb; }
+    .cpn-peek-head { color: #6b665e; border-bottom-color: rgba(60,55,45,0.14); }
+    .cpn-peek-head b { color: #c25f3e; }
+    .cpn-peek-note { color: #6b665e; }
   }
-  .cpn-peek-note { margin-top: 9px; font-size: 11px; opacity: .6; }
   `;
 
   function injectStyles() {
@@ -1066,8 +1107,8 @@
     if (offset === lastOffset) return;
     lastOffset = offset;
     rail.style.right = offset + 'px';
-    // Keep the peek card clear of both the rail and the panel.
-    if (peek) peek.style.right = (offset + 400) + 'px';
+    // The card measures itself against the rail in positionPeek, so it is not
+    // placed from here as well. Two owners for one value drift apart.
   }
 
   function scroller() {
@@ -1654,7 +1695,13 @@
     railList.className = 'cpn-list';
     rail.appendChild(railList);
 
-    rail.addEventListener('mouseleave', hidePeek);
+    // Leaving the rail dismisses a hover preview. It does not dismiss one you
+    // opened by clicking, because you leave the rail precisely to go and read
+    // the thread it is telling you about.
+    rail.addEventListener('mouseleave', () => {
+      clearTimeout(peekTimer);
+      if (!peekSticky) hidePeek();
+    });
     document.body.appendChild(rail);
     lastOffset = -1;
     syncRailOffset();
@@ -1850,6 +1897,14 @@
 
       row.append(tick, label);
       row.addEventListener('click', () => jumpTo(i));
+      if (entry.kind === 'q') {
+        row.addEventListener('mouseenter', () => armPeek(i));
+        row.addEventListener('mouseleave', () => clearTimeout(peekTimer));
+      } else {
+        // A document row has a filename and a tooltip already. Dimming the
+        // page to repeat the filename would be noise.
+        row.addEventListener('mouseenter', hidePeek);
+      }
       railList.appendChild(row);
       rows.push({ el: row, entry });
     });
@@ -1951,7 +2006,9 @@
     // several seconds. Testing on a 14 question thread showed the target
     // almost never mounts from a scripted scroll anyway. Only real scrolling
     // reliably loads it, which is what the note on the card tells you.
-    showPeek(i);
+    // Sticky: a click means you meant it, so this one does not vanish when the
+    // cursor moves off the row the way the hover preview does.
+    showPeek(i, { mounted: false, sticky: true });
 
     const sc = scroller();
     if (sc && questions.length > 1) {
@@ -1965,28 +2022,118 @@
     }
   }
 
-  function showPeek(i) {
+  /*
+   * The whole prompt, on hover.
+   *
+   * `mounted` says whether the message is actually in the page. When it is
+   * not, the card says so, because otherwise a click that lands approximately
+   * looks broken rather than explained.
+   */
+  let peekScrim = null;
+  let peekTimer = null;
+  let peekHideTimer = null;
+  let peekSticky = false;
+
+  function showPeek(i, opts) {
+    const o = opts || {};
     hidePeek();
+    peekSticky = !!o.sticky;
     const item = entries[i] && entries[i].q;
     if (!item) return;
+
+    peekScrim = document.createElement('div');
+    peekScrim.className = 'cpn-scrim';
+    document.body.appendChild(peekScrim);
+    // Next frame, or the transition has nothing to move from.
+    requestAnimationFrame(() => peekScrim && peekScrim.classList.add('cpn-scrim-on'));
+
     peek = document.createElement('div');
     peek.className = 'cpn-peek';
-    peek.textContent = item.text.slice(0, 1200);
-    const note = document.createElement('div');
-    note.className = 'cpn-peek-note';
-    note.textContent = 'Claude has not loaded this part of the chat into the page, '
-      + 'so there is nothing to scroll to yet. Scroll up a little and it will appear.';
-    peek.appendChild(note);
+
+    const head = document.createElement('div');
+    head.className = 'cpn-peek-head';
+    const num = document.createElement('b');
+    num.textContent = `Question ${item.n}`;
+    const of = document.createElement('span');
+    of.textContent = `of ${questions.length}`;
+    head.append(num, of);
+    peek.appendChild(head);
+
+    // The full prompt. The old card stopped at 1200 characters, which cut your
+    // longer briefs in half; it scrolls now instead of truncating.
+    peek.appendChild(document.createTextNode(item.text));
+
+    if (o.mounted === false) {
+      const note = document.createElement('div');
+      note.className = 'cpn-peek-note';
+      note.textContent = 'Claude has not loaded this part of the chat into the page, '
+        + 'so clicking lands nearby rather than exactly. Scroll up a little and it '
+        + 'will appear.';
+      peek.appendChild(note);
+    }
+
     document.body.appendChild(peek);
+    positionPeek(i);
+    if (o.sticky) peekHideTimer = setTimeout(hidePeek, 12000);
+  }
+
+  /*
+   * Sits to the left of the rail and vertically near the row it belongs to,
+   * measured rather than assumed. The old card used a fixed right: 400px,
+   * which put it in a different place every time the rail moved.
+   */
+  function positionPeek(i) {
+    if (!peek) return;
+    const railBox = rail ? rail.getBoundingClientRect() : null;
+    const gap = 14;
+    const right = railBox ? Math.round(window.innerWidth - railBox.left) + gap : 60;
+    peek.style.right = Math.max(gap, right) + 'px';
 
     const row = rows[i] && rows[i].el.getBoundingClientRect();
-    const top = row ? Math.min(Math.max(8, row.top - 20), window.innerHeight - 200) : 80;
-    peek.style.top = top + 'px';
-    setTimeout(hidePeek, 9000);
+    const h = peek.getBoundingClientRect().height;
+    const wanted = row ? row.top + row.height / 2 - h / 2 : 80;
+    const top = Math.min(Math.max(12, wanted), Math.max(12, window.innerHeight - h - 12));
+    peek.style.top = Math.round(top) + 'px';
   }
 
   function hidePeek() {
+    clearTimeout(peekTimer);
+    clearTimeout(peekHideTimer);
+    peekSticky = false;
     if (peek) { peek.remove(); peek = null; }
+    if (peekScrim) { peekScrim.remove(); peekScrim = null; }
+  }
+
+  /*
+   * Escape closes it, and so does a click anywhere off the card. The scrim
+   * cannot carry that itself: it takes no pointer events, on purpose, so the
+   * rail underneath stays usable while the card is up.
+   */
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && peek) hidePeek();
+  }, true);
+
+  document.addEventListener('mousedown', (e) => {
+    if (!peek || !peekSticky) return;
+    if (peek.contains(e.target)) return;
+    if (rail && rail.contains(e.target)) return;
+    hidePeek();
+  }, true);
+
+  /*
+   * A short delay, so running the cursor down the rail to reach one row does
+   * not strobe the card through every row on the way.
+   */
+  const PEEK_DELAY_MS = 260;
+
+  function armPeek(i) {
+    clearTimeout(peekTimer);
+    peekTimer = setTimeout(() => {
+      const entry = entries[i];
+      if (!entry || entry.kind !== 'q') return;
+      const mounted = !!(rows[i] && rows[i].node);
+      showPeek(i, { mounted });
+    }, PEEK_DELAY_MS);
   }
 
   /* ------------------------------------------------------------------ *
