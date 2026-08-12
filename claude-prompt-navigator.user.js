@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Prompt Navigator
 // @namespace    local.deepith
-// @version      3.10.0
+// @version      3.10.1
 // @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it reads the session event log for the same complete list, and shows the files that session produced.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -2392,6 +2392,9 @@
       convEffort = null;
       domSignature = '';
       artifactSig = null;      // re-baseline, or the new thread reads as changed
+      clearTimeout(emptyTimer);
+      emptyTimer = null;
+      emptyRetries = 0;        // a new thread gets its own budget of retries
       activeIndex = -1;
       render();
       if (r) load(r);
@@ -2444,6 +2447,39 @@
     }
 
     if (questions.length) { syncState(); maybeRefetch(); maybeRefetchDocs(); }
+    else retryEmpty(r);
+  }
+
+  /*
+   * A rail with nothing in it never tried again.
+   *
+   * Everything that keeps the list current sat behind `if (questions.length)`,
+   * so an empty list was a dead end. That is exactly what a new chat produces:
+   * claude.ai flips the URL to /chat/<uuid> as soon as the conversation is
+   * created, the rail loads at that instant, and the API has no messages yet.
+   * It returned an empty list and nothing ever asked again, which is why only
+   * a reload brought the rail back.
+   *
+   * The retry is conditional rather than a blind timer. Messages on screen
+   * while the list is empty means the rail is wrong, so it asks again. A
+   * genuinely empty chat has nothing mounted and costs no requests at all.
+   */
+  const EMPTY_RETRY_MS = 1500;
+  const EMPTY_RETRY_MAX = 20;              // about 30 seconds, then it stops
+  let emptyRetries = 0;
+  let emptyTimer = null;
+
+  function retryEmpty(r) {
+    if (!r || r.mode !== 'chat') return;
+    if (emptyTimer || loading) return;
+    if (emptyRetries >= EMPTY_RETRY_MAX) return;
+    if (!mountedNodes().length) return;    // nothing on screen, nothing to miss
+    emptyTimer = setTimeout(() => {
+      emptyTimer = null;
+      emptyRetries++;
+      const now = route();
+      if (now && now.mode === 'chat' && !questions.length) load(now);
+    }, EMPTY_RETRY_MS);
   }
 
   /*
