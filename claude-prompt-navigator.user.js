@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Prompt Navigator
 // @namespace    local.deepith
-// @version      3.9.4
+// @version      3.10.0
 // @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it reads the session event log for the same complete list, and shows the files that session produced.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -2347,8 +2347,22 @@
     consumePendingJump();
   }
 
+  /*
+   * A debounce that never settled.
+   *
+   * This used to clearTimeout and reschedule on every call. tick() runs every
+   * 900ms and refetchMs is 1600, so the timer was always cleared before it
+   * could fire, and the condition that set it stays true for as long as your
+   * new message is on screen, which is forever. The refetch therefore never
+   * ran and the rail only picked up new questions on a page reload.
+   *
+   * It is a plain delay now. Once armed it is left alone, and it disarms when
+   * it fires.
+   */
   let refetchTimer = null;
+
   function maybeRefetch() {
+    if (refetchTimer || loading) return;   // armed, or a load is already running
     // A message on screen that is not in our list means you sent a new one.
     const nodes = mountedNodes();
     const unknown = nodes.some((el) => {
@@ -2356,8 +2370,8 @@
       return k && !questions.some((q) => q.key === k || k.startsWith(q.key) || q.key.startsWith(k));
     });
     if (!unknown) return;
-    clearTimeout(refetchTimer);
     refetchTimer = setTimeout(() => {
+      refetchTimer = null;
       const r = route();
       if (r && r.mode === 'chat') load(r);
     }, CONFIG.refetchMs);
@@ -2377,6 +2391,7 @@
       convModel = null;
       convEffort = null;
       domSignature = '';
+      artifactSig = null;      // re-baseline, or the new thread reads as changed
       activeIndex = -1;
       render();
       if (r) load(r);
@@ -2409,13 +2424,65 @@
         }));
         activeIndex = -1;
         render();
+        /*
+         * A question on screen that the walk has never seen means you have
+         * asked something since it ran. The walk is cached per session, so
+         * without this the rail froze at whatever the session held when you
+         * opened it and only a reload fixed it.
+         */
+        const isNew = fresh.some((f) => f.key
+          && !coworkQuestions.some((q) => q.key === f.key
+            || f.key.startsWith(q.key) || q.key.startsWith(f.key)));
+        if (isNew && coworkFetchedFor === r.id) {
+          coworkFetchedFor = null;
+          loadCoworkQuestions(r.id);
+        }
       } else if (questions.length) {
         syncState();
       }
       return;
     }
 
-    if (questions.length) { syncState(); maybeRefetch(); }
+    if (questions.length) { syncState(); maybeRefetch(); maybeRefetchDocs(); }
+  }
+
+  /*
+   * Files arrive without a question attached.
+   *
+   * Claude writes one part-way through an answer, so nothing new appears in
+   * the message list and maybeRefetch has no reason to fire. Watching the
+   * Artifacts panel instead catches it: every artifact carries a View button
+   * whether the panel is open or shut, so the set of them is a free signal
+   * that the thread has produced something the rail has not heard about.
+   *
+   * Only the documents are refetched, not the whole conversation.
+   */
+  let artifactSig = null;
+  let docsRefetching = false;
+
+  function artifactSignature() {
+    return [...document.querySelectorAll('button[aria-label^="View "]')]
+      .map((b) => b.getAttribute('aria-label'))
+      .filter((t) => t && t !== 'View all')
+      .sort()
+      .join('|');
+  }
+
+  async function maybeRefetchDocs() {
+    if (docsRefetching || loading) return;
+    const sig = artifactSignature();
+    if (sig === artifactSig) return;
+    // First pass after a load just records what is there; it is not a change.
+    if (artifactSig === null) { artifactSig = sig; return; }
+    artifactSig = sig;
+    const r = route();
+    if (!r || r.mode !== 'chat') return;
+    docsRefetching = true;
+    try {
+      documents = await fetchDocuments(r.id);
+      render();
+    } catch (e) { /* the rail keeps the documents it already had */ }
+    finally { docsRefetching = false; }
   }
 
   function throttle(fn, ms) {
