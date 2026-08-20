@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Prompt Navigator
 // @namespace    local.deepith
-// @version      3.10.1
+// @version      3.11.0
 // @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it reads the session event log for the same complete list, and shows the files that session produced.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -1308,10 +1308,32 @@
     if (!res.ok) return usage;
     const data = await res.json();
     const pick = (kind) => (data.limits || []).find((l) => l.kind === kind) || null;
-    usage = { session: pick('session'), weekly: pick('weekly_all') };
+    /*
+     * Three buckets, not two. weekly_scoped is a per-model ceiling that sits
+     * beside the all-model weekly one, and it is the one that bites first if you
+     * live on a single model. It names itself through scope.model.display_name,
+     * so the label is read from the response rather than hardcoded: an account
+     * on a different model gets that model's name with no change here.
+     */
+    usage = {
+      session: pick('session'),
+      weekly: pick('weekly_all'),
+      scoped: pick('weekly_scoped'),
+    };
     usageAt = Date.now();
     recordWeeklySample(usage.weekly);
     return usage;
+  }
+
+  /*
+   * The scoped limit names itself. Claude returns the model in
+   * scope.model.display_name, currently "Fable" on this account, so the label
+   * follows whatever the account is actually capped on instead of a constant
+   * that would go stale the next time the plans change.
+   */
+  function scopedName(l) {
+    const n = l && l.scope && l.scope.model && l.scope.model.display_name;
+    return n ? String(n) : 'Model';
   }
 
   /*
@@ -1505,7 +1527,7 @@
   }
 
   function renderMeters() {
-    if (!sessionRow || !weeklyRow) return;
+    if (!sessionRow || !weeklyRow || !scopedRow) return;
     renderModelLine();
 
     renderContextLine(Math.round(convChars / 3.8), Math.round(docChars / 3.8));
@@ -1514,6 +1536,7 @@
     if (!usage || (!usage.session && !usage.weekly)) {
       setRow(sessionRow, null);
       setRow(weeklyRow, null);
+      setRow(scopedRow, null);
       return;
     }
 
@@ -1521,17 +1544,22 @@
     // limit Claude currently marks active, since the stream does not say
     // which bucket it belongs to.
     const live = liveLimits && Date.now() - liveLimits.at < 600000 ? liveLimits : null;
-    const present = [usage.session, usage.weekly].filter(Boolean);
+    const present = [usage.session, usage.weekly, usage.scoped].filter(Boolean);
     const binding = present.find((l) => l.is_active)
       || present.slice().sort((a, b) => b.percent - a.percent)[0]
       || null;
 
-    const draw = (r, l, name) => {
+    /*
+     * The window is passed rather than looked up from the label. The scoped
+     * row is named after a model, so keying WINDOW_MS on the label would have
+     * returned undefined and silently dropped its clock marker.
+     */
+    const draw = (r, l, name, winMs, winWords) => {
       if (!l) { setRow(r, null); return; }
       const exact = live && l === binding;
       const pct = exact ? live.percent : l.percent;
       const shown = exact ? pct.toFixed(1) : Math.round(pct);
-      const timePct = elapsedPct(l.resets_at, WINDOW_MS[name]);
+      const timePct = elapsedPct(l.resets_at, winMs);
       const pace = (timePct == null) ? ''
         : (pct <= timePct
           ? '\n\nThe fill sits behind the marker, so you are using this window '
@@ -1545,13 +1573,19 @@
         + (exact ? 'This figure came from the reply stream and is exact.'
                  : 'Polled every minute and rounded by Claude.')
         + `\n\nThe white marker is the clock, not your usage. It shows how much of `
-        + `the ${name === 'Session' ? 'five hour' : 'seven day'} window has passed `
+        + `the  window has passed `
         + 'and reaches the end as the timer hits zero.' + pace,
         timePct);
     };
 
-    draw(sessionRow, usage.session, 'Session');
-    draw(weeklyRow, usage.weekly, 'Weekly');
+    draw(sessionRow, usage.session, 'Session', WINDOW_MS.Session, 'five hour');
+    draw(weeklyRow, usage.weekly, 'Weekly', WINDOW_MS.Weekly, 'seven day');
+    /*
+     * The per-model row is drawn only when the account has one. Plans without
+     * a scoped ceiling get two bars and no empty third, rather than a row
+     * labelled with a model name that means nothing to them.
+     */
+    draw(scopedRow, usage.scoped, scopedName(usage.scoped), WINDOW_MS.Weekly, 'seven day');
     renderBurnLine(usage.weekly);
   }
 
@@ -1604,7 +1638,7 @@
    * ------------------------------------------------------------------ */
   let rail = null, railList = null, headCount = null, rows = [], activeIndex = -1;
   let modelLine = null, ctxLine = null, burnLine = null;
-  let sessionRow = null, weeklyRow = null;
+  let sessionRow = null, weeklyRow = null, scopedRow = null;
 
   function makeMeterRow() {
     const row = document.createElement('div');
@@ -1705,12 +1739,14 @@
     ctxLine.className = 'cpn-meter';
     sessionRow = makeMeterRow();
     weeklyRow = makeMeterRow();
+    scopedRow = makeMeterRow();
 
     burnLine = document.createElement('div');
     burnLine.className = 'cpn-meter';
     burnLine.style.display = 'none';
 
-    head.append(top, modelLine, ctxLine, sessionRow.row, weeklyRow.row, burnLine);
+    head.append(top, modelLine, ctxLine,
+      sessionRow.row, weeklyRow.row, scopedRow.row, burnLine);
     rail.appendChild(head);
 
     railList = document.createElement('div');
