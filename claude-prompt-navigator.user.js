@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Prompt Navigator
 // @namespace    local.deepith
-// @version      3.11.0
+// @version      3.12.0
 // @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it reads the session event log for the same complete list, and shows the files that session produced.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -1692,7 +1692,7 @@
     const hand = document.createElement('button');
     hand.className = 'cpn-pin';
     hand.type = 'button';
-    hand.title = 'Copy a handoff block for starting a fresh thread';
+    hand.title = 'Copy a full handover for a fresh thread, verbatim, with the gaps named';
     hand.textContent = '⎘';
     hand.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1721,7 +1721,7 @@
     const save = document.createElement('button');
     save.className = 'cpn-pin';
     save.type = 'button';
-    save.title = 'Download the whole thread as markdown, both sides of it';
+    save.title = 'Download a complete record of this thread: both sides, in order, with files marked where they were made';
     save.textContent = '⤓';
     save.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1801,36 +1801,6 @@
       .filter(Boolean);
   }
 
-  function buildExport() {
-    const title = document.title.replace(/ - Claude$/, '');
-    const turns = mode === 'cowork' ? coworkTurns() : convTurns;
-    const lines = [`# ${title}`, ''];
-
-    lines.push(`Exported ${new Date().toLocaleString()}`);
-    lines.push(`Source: ${location.href}`);
-    if (convModel) lines.push(`Model: ${convModel}${convEffort ? ` (${convEffort} effort)` : ''}`);
-    lines.push(`${questions.length} question${questions.length === 1 ? '' : 's'}`
-      + (documents.length ? `, ${documents.length} file${documents.length === 1 ? '' : 's'}` : ''));
-    lines.push('');
-
-    if (documents.length) {
-      lines.push('## Files produced', '');
-      documents.forEach((d) => {
-        lines.push(`- ${d.name}${d.onDisk ? '' : '  (no longer downloadable)'}`);
-      });
-      lines.push('');
-    }
-
-    lines.push('## Transcript', '');
-    if (!turns.length) {
-      lines.push('_The transcript was not available. This happens on a Cowork '
-        + 'session whose event walk had not finished, or a chat the API declined._');
-    }
-    turns.forEach((t) => {
-      lines.push(t.who === 'you' ? '### You' : '### Claude', '', t.text, '');
-    });
-    return lines.join('\n');
-  }
 
   function downloadExport() {
     const title = document.title.replace(/ - Claude$/, '');
@@ -1848,33 +1818,152 @@
     setTimeout(() => URL.revokeObjectURL(url), 30000);
   }
 
-  function buildHandoff() {
-    const title = document.title.replace(/ - Claude$/, '');
-    const lines = [];
-    lines.push(`Handoff from an earlier Claude thread: ${title}`);
-    lines.push('');
+  /*
+   * One record, two deliveries.
+   *
+   * The export and the handoff used to be written separately and both were
+   * lossy in the same way. The handoff cut every question at 160 characters,
+   * which turns a twelve thousand character brief into a fragment, and it
+   * carried nothing Claude had said back, so a new thread inherited the
+   * questions without any of the answers and had to guess the rest. The export
+   * kept both sides but listed the files in a heap at the top, detached from
+   * the turn that produced them.
+   *
+   * They share a builder now. Nothing is summarised and nothing is truncated;
+   * the only difference is the opening paragraph and whether the result goes
+   * to a file or the clipboard.
+   */
+  function threadFacts() {
+    const facts = [];
     if (convModel) {
-      lines.push(`That thread ran ${MODEL_LABELS[convModel] || convModel}`
-        + (convEffort ? ` at ${convEffort} effort.` : '.'));
-      lines.push('');
+      facts.push(`- Model: ${MODEL_LABELS[convModel] || convModel}`
+        + (convEffort ? ` at ${convEffort} effort` : ''));
     }
-    lines.push(`WHAT I ASKED (${questions.length} in order)`);
-    questions.forEach((q) => {
-      const t = q.text.replace(/\s+/g, ' ').trim();
-      lines.push(`${q.n}. ${t.length > 160 ? t.slice(0, 160).trimEnd() + '…' : t}`);
+    if (mode === 'cowork') facts.push('- Surface: Claude Cowork');
+    if (projectInfo) {
+      facts.push(`- Project attached, holding ${projectInfo.docs_count} documents `
+        + `and ${projectInfo.files_count} files, whose contents are not in this record`);
+    }
+    facts.push(`- ${questions.length} question${questions.length === 1 ? '' : 's'}`
+      + (documents.length ? `, ${documents.length} file${documents.length === 1 ? '' : 's'} produced` : ''));
+    if (convChars) facts.push(`- Conversation size: about ${fmtTokens(Math.round(convChars / 3.8))} tokens of message text`);
+    facts.push(`- Source: ${location.href}`);
+    facts.push(`- Captured: ${new Date().toLocaleString()}`);
+    return facts;
+  }
+
+  /* Which question each file was created after, so it can sit in the record at
+     the point it was made rather than in a list divorced from its context. */
+  function docsByQuestion() {
+    const map = new Map();
+    entries.forEach((e) => {
+      if (e.kind !== 'doc' || e.anchor == null) return;
+      if (!map.has(e.anchor)) map.set(e.anchor, []);
+      map.get(e.anchor).push(e.doc);
     });
-    if (documents.length) {
-      lines.push('');
-      lines.push(`WHAT IT PRODUCED (${documents.length})`);
-      documents.forEach((d) => {
-        lines.push(`- ${d.name}${d.onDisk ? '' : '  (no longer downloadable, would need regenerating)'}`);
-      });
+    return map;
+  }
+
+  function buildRecord(opts) {
+    const o = opts || {};
+    const title = document.title.replace(/ - Claude$/, '');
+    const turns = mode === 'cowork' ? coworkTurns() : convTurns;
+    const anchored = docsByQuestion();
+    const orphans = entries
+      .filter((e) => e.kind === 'doc' && e.anchor == null)
+      .map((e) => e.doc);
+    const L = [];
+
+    L.push(`# ${title}`, '');
+
+    if (o.forHandoff) {
+      L.push('You are picking up work from an earlier Claude thread. Everything '
+        + 'below is copied from that thread verbatim, in order. Nothing here has '
+        + 'been summarised.', '');
+      L.push('Where this record cannot tell you something it says so explicitly. '
+        + 'Treat those gaps as gaps: ask me rather than filling them in with a '
+        + 'plausible guess, because a plausible guess is exactly what went wrong '
+        + 'last time work moved between threads.', '');
+    } else {
+      L.push('A complete record of this conversation, both sides, in order.', '');
     }
-    lines.push('');
-    lines.push('WHAT I NEED FROM YOU');
-    lines.push('Pick up from the last item above. Ask me for anything in that list '
-      + 'you need the contents of, rather than assuming what it said.');
-    return lines.join('\n');
+
+    L.push('## The thread', '');
+    threadFacts().forEach((f) => L.push(f));
+    L.push('');
+
+    if (documents.length) {
+      L.push('## Files this thread produced', '');
+      documents.forEach((d) => {
+        const state = d.onDisk === false
+          ? '  — created here but since cleared from the sandbox, so it cannot be '
+            + 'downloaded again without regenerating it'
+          : '  — still downloadable from the original thread';
+        L.push(`- \`${d.name}\`${state}`);
+      });
+      L.push('');
+      L.push('_Their contents are not in this record. Ask for any you need._', '');
+    }
+
+    L.push('## What was said', '');
+    if (!turns.length) {
+      L.push('_The transcript could not be read. On Cowork this means the session '
+        + 'event walk had not finished; in a chat it means the conversation API '
+        + 'declined the request. The question list above is still complete._', '');
+    }
+
+    let asked = 0;
+    turns.forEach((t) => {
+      if (t.who === 'you') {
+        asked++;
+        L.push(`### Question ${asked}`, '', t.text, '');
+      } else {
+        L.push('### Claude', '', t.text, '');
+        (anchored.get(asked - 1) || []).forEach((d) => {
+          L.push(`> Wrote \`${d.name}\` here.`, '');
+        });
+      }
+    });
+
+    if (orphans.length) {
+      L.push('### Files with no turn recorded against them', '');
+      orphans.forEach((d) => L.push(`- \`${d.name}\``));
+      L.push('');
+    }
+
+    L.push('## What this record does not carry', '');
+    L.push('- The contents of the files listed above, only their names');
+    L.push('- Claude\'s thinking, which is not returned by the API and is not '
+      + 'resent on later turns anyway');
+    L.push('- Tool calls and their output, so where Claude searched, read or ran '
+      + 'something you see the conclusion and not the working');
+    if (projectInfo) {
+      L.push('- Project knowledge, which was in context for the original thread '
+        + 'and is not reproduced here');
+    }
+    if (mode !== 'cowork') {
+      L.push('- Anything you edited away, since only the live branch of the '
+        + 'conversation is included');
+    }
+    L.push('- Attachments you uploaded, which are named in the questions where '
+      + 'they appeared but whose contents are not included');
+    L.push('');
+
+    if (o.forHandoff) {
+      L.push('## Where to start', '');
+      L.push('Pick up from the last question above. Before acting on anything '
+        + 'that depends on a file or on project knowledge, ask me for it.');
+    }
+
+    return L.join('\n');
+  }
+
+  function buildExport() {
+    return buildRecord({ forHandoff: false });
+  }
+
+  function buildHandoff() {
+    return buildRecord({ forHandoff: true });
   }
 
   function render() {
