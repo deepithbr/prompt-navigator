@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Prompt Navigator
 // @namespace    local.deepith
-// @version      3.12.0
+// @version      3.12.1
 // @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it reads the session event log for the same complete list, and shows the files that session produced.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -1066,6 +1066,26 @@
    * on the files panel it found exactly one candidate, 400px wide, and the
    * rail moves out by that width.
    */
+  /*
+   * The main content region is not a panel.
+   *
+   * Geometry alone could not tell them apart. Expand the left sidebar and the
+   * chat column starts well inside the viewport, runs flush to the right edge
+   * and is tall, which is every test this used to apply. On a wide window it
+   * also slips under the width cap, so the rail was pushed all the way across
+   * and ended up sitting on the sidebar's edge with the chat to its right.
+   *
+   * The reliable difference is what a block contains. The message composer and
+   * the messages themselves live in the main region and never in a docked
+   * panel, so a candidate holding either is the page, not something the rail
+   * needs to move out of the way of.
+   *
+   * The floor is the second guard. Whatever is left to the left of a real
+   * panel has to be wide enough to still be a conversation; if it is not, the
+   * thing measured was the whole content area under another name.
+   */
+  const PANEL_MIN_REMAINING = 420;
+
   function panelOffset() {
     const vw = window.innerWidth, vh = window.innerHeight;
     let edge = vw;
@@ -1077,6 +1097,9 @@
       if (r.height < vh * 0.35) continue;
       if (Math.abs(r.right - vw) > 10) continue;
       if (r.left <= vw * 0.15) continue;
+      if (r.left < PANEL_MIN_REMAINING) continue;
+      if (el.querySelector('[data-testid="chat-input"]')) continue;
+      if (el.querySelector(MESSAGE_SELECTORS[0])) continue;
       if (r.left < edge) edge = r.left;
     }
     return Math.max(0, Math.round(vw - edge));
