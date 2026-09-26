@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Prompt Navigator
 // @namespace    local.deepith
-// @version      3.12.2
+// @version      3.13.0
 // @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it reads the session event log for the same complete list, and shows the files that session produced.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -69,15 +69,26 @@
    * its own tighter ceiling on top is not something the page reports, so treat
    * the denominator as the model's capability rather than a promise. (inference)
    */
+  /*
+   * Chat windows, per the Claude Help Center article "How large is the context
+   * window on paid Claude plans?", checked 26 Sep 2026. These are the chat
+   * figures. Code and Cowork give some models more, and Cowork reports its own
+   * window in the session log, so Cowork never reads this table.
+   *
+   * Keys are exact model IDs. A model missing here falls to
+   * CONFIG.contextLimitTokens, which the article gives as the default for
+   * everything it does not list.
+   */
   const CONTEXT_WINDOWS = {
-    'claude-fable-5': 1000000,
-    'claude-mythos-5': 1000000,
+    'claude-fable-5-1': 1000000,
+    'claude-opus-5-5': 1000000,
     'claude-opus-5': 1000000,
-    'claude-opus-4-8': 1000000,
-    'claude-opus-4-7': 1000000,
-    'claude-opus-4-6': 1000000,
     'claude-sonnet-5': 1000000,
-    'claude-sonnet-4-6': 1000000,
+    'claude-fable-5': 500000,
+    'claude-opus-4-8': 500000,
+    'claude-opus-4-7': 500000,
+    'claude-opus-4-6': 500000,
+    'claude-sonnet-4-6': 500000,
     'claude-haiku-4-5': 200000,
   };
 
@@ -250,6 +261,8 @@
     transition: opacity 120ms ease, background 120ms ease;
   }
   .cpn-pin:hover { opacity: 1; background: rgba(255,255,255,0.08); }
+  /* Lit when the thread should move: near compaction, or already compacted. */
+  .cpn-pin.cpn-nudge { opacity: 1; color: #d97757; }
   @media (prefers-color-scheme: light) {
     .cpn-pin:hover { background: rgba(0,0,0,0.07); }
   }
@@ -524,6 +537,21 @@
           if (typeof a.extracted_content === 'string') c += a.extracted_content.length;
         });
         return total + c;
+      }, 0);
+
+      /*
+       * Uploaded PDFs are the biggest thing a chat carries and the rail used to
+       * miss them completely. They arrive as files, not attachments, with no
+       * extracted text to measure, but the server stamps each one with its own
+       * token_count. One PDF measured on 26 Sep 2026 came to 100,480 tokens in a
+       * thread whose visible text was about 11,000.
+       */
+      convFileTokens = msgs.reduce((total, m) => {
+        (m.files || []).forEach((f) => {
+          const t = f && f.document_asset && f.document_asset.token_count;
+          if (typeof t === 'number' && t > 0) total += t;
+        });
+        return total;
       }, 0);
 
       /*
@@ -934,6 +962,7 @@
     return {
       questions: coworkQuestionsFrom(events),
       writes: coworkWritesFrom(events),
+      context: coworkContextFrom(events),
       events,
     };
   }
@@ -971,6 +1000,57 @@
       });
     });
     return first;
+  }
+
+  /*
+   * Cowork's context size, exact.
+   *
+   * Chat hides this. Its reply stream arrives with the usage object stripped
+   * out of message_start and message_delta, checked on 26 Sep 2026. Cowork
+   * does not hide it. Every assistant event in the session log carries the
+   * API's own usage figures, and the context for that call is the prompt it
+   * was sent, which is input_tokens plus whatever came from or went into the
+   * cache. Claude Code reads its own meter off the same three numbers.
+   *
+   * The window and the compaction point come from an autocompact_state event,
+   * which on these sessions reads effective_window 980000 and threshold
+   * 784000. Past the threshold Cowork summarises earlier work to make room.
+   *
+   * Events from a subagent are skipped. They carry parent_tool_use_id and
+   * describe the subagent's small context, not the session's.
+   */
+  /*
+   * Compaction leaves a system event with subtype compact_boundary, carrying
+   * the size before and after. One session read on 26 Sep 2026 went from
+   * 781,941 tokens to 12,089, which is how much detail a summary replaces.
+   */
+  function isCompactionEvent(e) {
+    return e.event_type === 'system' && !!e.payload
+      && e.payload.subtype === 'compact_boundary';
+  }
+
+  function coworkContextFrom(events) {
+    let used = null, win = null, threshold = null, compaction = null;
+    for (const e of events) {                       // newest first
+      const p = e.payload || {};
+      if (used == null && e.event_type === 'assistant' && !p.parent_tool_use_id) {
+        const u = p.message && p.message.usage;
+        if (u) {
+          used = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0)
+            + (u.cache_creation_input_tokens || 0);
+        }
+      }
+      if (win == null && e.event_type === 'autocompact_state') {
+        const v = p.value || {};
+        if (v.effective_window) { win = v.effective_window; threshold = v.threshold || null; }
+      }
+      if (compaction == null && isCompactionEvent(e)) {
+        const m = p.compact_metadata || {};
+        compaction = { seq: Number(e.sequence_num), pre: m.pre_tokens || null, post: m.post_tokens || null };
+      }
+      if (used != null && win != null && compaction != null) break;
+    }
+    return { used, win, threshold, compaction };
   }
 
   function coworkQuestionsFrom(events) {
@@ -1191,6 +1271,7 @@
    * your own threshold instead.
    */
   let convChars = 0;
+  let convFileTokens = 0;     // server-stamped token counts on uploaded PDFs
   let usage = null;
   let usageAt = 0;
   let liveLimits = null;      // exact figures pushed down the reply stream
@@ -1526,27 +1607,101 @@
    * A measured token count is defensible. A share of an unknown budget is not.
    * So this shows what was counted and lets the number speak by growing.
    */
+  /*
+   * Chat context, as a band.
+   *
+   * Chat cannot be measured exactly. Its reply stream has the usage object
+   * stripped out, so this adds up what the page does show: the live branch of
+   * messages, pasted attachments, files Claude wrote, and the token_count the
+   * server stamps on uploaded PDFs. What it cannot see is the system prompt,
+   * tool definitions and project knowledge, so the true figure is always
+   * higher than this one.
+   *
+   * That is why it is a band and why the bands sit well under the compaction
+   * point. Cowork's compaction fires at 80% of its window; the band warns at
+   * 60% of a count that is already low. Showing a percentage here would be
+   * the same false precision as the headroom projection that was removed.
+   */
+  const CHAT_BAND = { long: 0.35, near: 0.6 };
+
   function renderContextLine(talk, docs) {
     if (!ctxLine) return;
-    if (mode !== 'chat' || (!talk && !docs)) { ctxLine.style.display = 'none'; return; }
+    const pdf = convFileTokens || 0;
+    const est = talk + docs + pdf;
+    if (mode !== 'chat' || !est) { ctxLine.style.display = 'none'; return; }
+
+    const win = CONTEXT_WINDOWS[convModel] || CONFIG.contextLimitTokens;
+    const known = !!CONTEXT_WINDOWS[convModel];
+    const frac = est / win;
+    const band = frac >= CHAT_BAND.near ? 'near compaction'
+      : frac >= CHAT_BAND.long ? 'getting long' : 'plenty of room';
+
     ctxLine.style.display = '';
-    ctxLine.textContent = docs
-      ? `≈ ${fmtTokens(talk)} in messages · ${fmtTokens(docs)} in documents`
-      : `≈ ${fmtTokens(talk)} in messages`;
-    ctxLine.title = 'Measured from this conversation at about 3.8 characters per '
-      + 'token, counting the live branch only, and skipping thinking because it '
-      + 'is not resent.\n\n'
-      + (docs ? 'The document figure is content that went through the window when '
-        + 'each file was written. Whether it is still carried on later turns is '
-        + 'not something the page reports.\n\n' : '')
-      + 'Deliberately not shown as a percentage. claude.ai publishes no usable '
-      + 'context budget, and this count cannot see your system prompt, skills, '
+    ctxLine.textContent = `Context · ${band}`;
+    ctxLine.classList.toggle('cpn-warn', frac >= CHAT_BAND.near);
+    nudgeHandoff(frac >= CHAT_BAND.near,
+      'This thread is getting close to where Claude starts summarising earlier '
+      + 'messages. A handoff now carries everything verbatim.');
+
+    const parts = [`messages ${fmtTokens(talk)}`];
+    if (pdf) parts.push(`uploaded PDFs ${fmtTokens(pdf)}, as the server reports them`);
+    if (docs) parts.push(`files Claude wrote ${fmtTokens(docs)}`);
+
+    ctxLine.title = `About ${fmtTokens(est)} counted against a ${fmtTokens(win)} window`
+      + (known ? ` for ${MODEL_LABELS[convModel] || convModel}.` : ', the default for models the Help Center does not list.')
+      + `\n\nCounted: ${parts.join(', ')}.`
+      + '\n\nNot counted, because claude.ai never reports them: the system prompt, '
       + 'tool definitions'
-      + (projectInfo
-        ? `, or this project's ${projectInfo.docs_count} documents and `
-          + `${projectInfo.files_count} files.`
-        : '.')
-      + '\n\nWatch it grow across a thread rather than reading it as a fill level.';
+      + (projectInfo ? `, and this project's ${projectInfo.docs_count} documents and ${projectInfo.files_count} files` : '')
+      + '. The real figure is higher, which is why this is a band and not a percentage.'
+      + '\n\nNear the limit Claude summarises earlier messages and carries on, '
+      + 'but only with code execution switched on. Without it the chat stops.'
+      + '\n\nWindow sizes from the Claude Help Center, checked 26 Sep 2026.';
+  }
+
+  /* Cowork context, exact, read from the session log. */
+  function renderCoworkContext() {
+    if (!ctxRow) return;
+    const c = coworkCtx;
+    if (mode !== 'cowork' || c.used == null || !c.win) {
+      setRow(ctxRow, null);
+      if (mode === 'cowork') nudgeHandoff(false);
+      return;
+    }
+    const pct = (c.used / c.win) * 100;
+    const mark = c.threshold ? (c.threshold / c.win) * 100 : null;
+    const near = !!c.threshold && c.used >= c.threshold * 0.85;
+    const toGo = c.threshold ? Math.max(0, c.threshold - c.used) : null;
+
+    let title = `${c.used.toLocaleString()} tokens in context, read from this `
+      + `session's own log, out of a ${c.win.toLocaleString()} token window.`;
+    if (c.threshold) {
+      title += `\n\nThe white marker is where Cowork compacts, at `
+        + `${c.threshold.toLocaleString()}. ${toGo.toLocaleString()} tokens to go.`
+        + ' Past it, earlier work is summarised to make room and the detail is gone.';
+    }
+    if (c.compaction) {
+      title += '\n\nThis session has already compacted'
+        + (c.compaction.pre && c.compaction.post
+          ? `, from ${c.compaction.pre.toLocaleString()} tokens down to ${c.compaction.post.toLocaleString()}.`
+          : '.')
+        + ' Anything from before that point survives only as a summary.';
+    }
+    setRow(ctxRow, pct, `Context ${fmtTokens(c.used)}`, `of ${fmtTokens(c.win)}`,
+      near, title, mark);
+
+    nudgeHandoff(near || !!c.compaction, c.compaction
+      ? 'This session has compacted, so its early detail now exists only as a '
+        + 'summary. A handoff to a fresh session carries the full record.'
+      : 'This session is close to compacting. A handoff now carries everything verbatim.');
+  }
+
+  function nudgeHandoff(on, why) {
+    if (!handBtn) return;
+    handBtn.classList.toggle('cpn-nudge', !!on);
+    handBtn.title = on
+      ? `${why}\n\nClick to copy a full handover for a fresh thread.`
+      : 'Copy a full handover for a fresh thread, verbatim, with the gaps named';
   }
 
   function renderMeters() {
@@ -1554,6 +1709,7 @@
     renderModelLine();
 
     renderContextLine(Math.round(convChars / 3.8), Math.round(docChars / 3.8));
+    renderCoworkContext();
 
 
     if (!usage || (!usage.session && !usage.weekly)) {
@@ -1661,7 +1817,8 @@
    * ------------------------------------------------------------------ */
   let rail = null, railList = null, headCount = null, rows = [], activeIndex = -1;
   let modelLine = null, ctxLine = null, burnLine = null;
-  let sessionRow = null, weeklyRow = null, scopedRow = null;
+  let sessionRow = null, weeklyRow = null, scopedRow = null, ctxRow = null;
+  let handBtn = null;         // the handoff button, lit when a thread should move
 
   function makeMeterRow() {
     const row = document.createElement('div');
@@ -1714,6 +1871,7 @@
      */
     const hand = document.createElement('button');
     hand.className = 'cpn-pin';
+    handBtn = hand;
     hand.type = 'button';
     hand.title = 'Copy a full handover for a fresh thread, verbatim, with the gaps named';
     hand.textContent = '⎘';
@@ -1763,13 +1921,14 @@
     sessionRow = makeMeterRow();
     weeklyRow = makeMeterRow();
     scopedRow = makeMeterRow();
+    ctxRow = makeMeterRow();
 
     burnLine = document.createElement('div');
     burnLine.className = 'cpn-meter';
     burnLine.style.display = 'none';
 
     head.append(top, modelLine, ctxLine,
-      sessionRow.row, weeklyRow.row, scopedRow.row, burnLine);
+      ctxRow.row, sessionRow.row, weeklyRow.row, scopedRow.row, burnLine);
     rail.appendChild(head);
 
     railList = document.createElement('div');
@@ -2410,6 +2569,41 @@
   let coworkFetchedFor = null;
   let coworkFetching = false;
 
+  let coworkCtx = { used: null, win: null, threshold: null, compaction: null };
+
+  function mergeCoworkCtx(c) {
+    if (!c) return;
+    if (c.used != null) coworkCtx.used = c.used;
+    if (c.win) { coworkCtx.win = c.win; coworkCtx.threshold = c.threshold; }
+    if (c.compaction) coworkCtx.compaction = c.compaction;
+  }
+
+  /*
+   * A cheap re-read of the newest events only. The context grows with every
+   * reply, and the full walk runs once per session and is several megabytes,
+   * so the bar is kept current from the last 25 events instead. The window
+   * and compaction point rarely change, so a short page that misses the
+   * autocompact_state event keeps the values already held.
+   */
+  let ctxRefreshing = false;
+  let ctxRefreshedAt = 0;
+  async function refreshCoworkContext(sessionId) {
+    if (ctxRefreshing || !sessionId) return;
+    if (Date.now() - ctxRefreshedAt < 15000) return;
+    ctxRefreshedAt = Date.now();
+    ctxRefreshing = true;
+    try {
+      const res = await fetch(`/v1/code/sessions/${sessionId}/events?limit=25`,
+        { headers: COWORK_HEADERS });
+      if (res.ok && currentRoute === 'cowork:' + sessionId) {
+        const body = await res.json();
+        mergeCoworkCtx(coworkContextFrom(body.data || []));
+        renderMeters();
+      }
+    } catch (e) { /* the bar keeps its last reading */ }
+    finally { ctxRefreshing = false; }
+  }
+
   function loadCoworkQuestions(sessionId) {
     if (coworkFetching || coworkFetchedFor === sessionId) return;
     coworkFetching = true;
@@ -2418,6 +2612,8 @@
       if (currentRoute !== 'cowork:' + sessionId) return;
       coworkWrites = writes;
       coworkEvents = events;
+      mergeCoworkCtx(coworkContextFrom(events));
+      renderMeters();
       if (partial.length <= questions.length) return;
       coworkQuestions = partial;
       questions = partial;
@@ -2430,6 +2626,8 @@
         coworkWrites = all.writes;
         coworkEvents = all.events;
         coworkFetchedFor = sessionId;
+        mergeCoworkCtx(all.context);
+        renderMeters();
         if (all.questions.length) {
           questions = all.questions;
           domSignature = '';
@@ -2462,6 +2660,7 @@
         seq: coworkWrites.has(artifactKey(f.name)) ? coworkWrites.get(artifactKey(f.name)) : null,
       }));
       convChars = 0;
+      convFileTokens = 0;
       domSignature = questions.map((q) => q.key).join('|')
         + '#' + out.count + '#' + out.files.map((f) => f.name).join('|');
       activeIndex = -1;
@@ -2536,10 +2735,13 @@
       documents = [];
       if (coworkFetchedFor !== (r ? r.id : null)) coworkQuestions = [];
       convChars = 0;
+      convFileTokens = 0;
       convModel = null;
       convEffort = null;
       domSignature = '';
       artifactSig = null;      // re-baseline, or the new thread reads as changed
+      coworkCtx = { used: null, win: null, threshold: null, compaction: null };
+      ctxRefreshedAt = 0;
       clearTimeout(emptyTimer);
       emptyTimer = null;
       emptyRetries = 0;        // a new thread gets its own budget of retries
@@ -2575,6 +2777,7 @@
         }));
         activeIndex = -1;
         render();
+        refreshCoworkContext(r.id);
         /*
          * A question on screen that the walk has never seen means you have
          * asked something since it ran. The walk is cached per session, so
@@ -3036,6 +3239,13 @@
 
     // The app is a single page app, so the URL changes without a reload.
     setInterval(tick, 900);
+
+    // Cowork context grows with every reply, and a reply need not change
+    // anything on screen, so it is re-read on a slow clock as well.
+    setInterval(() => {
+      const r = route();
+      if (r && r.mode === 'cowork') refreshCoworkContext(r.id);
+    }, 45000);
 
     // Plan usage moves on its own, independently of anything you do here.
     setInterval(async () => { await fetchUsage(); renderMeters(); }, 60000);
