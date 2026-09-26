@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Usage Meter
 // @namespace    local.deepith
-// @version      1.2.0
+// @version      1.3.0
 // @description  Shows your ChatGPT plan usage as a bar with a window-elapsed marker, the same reading as the Claude Prompt Navigator header. Companion script — ChatGPT is a different origin, so this cannot live inside the claude.ai one.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -106,6 +106,8 @@
   .cgu-row.cgu-warn .cgu-fill { background: #d97757; }
   .cgu-row.cgu-warn .cgu-label { color: #d97757; opacity: .95; }
   .cgu-note { font-size: 10px; opacity: .45; }
+  .cgu-chat { font-size: 10.5px; opacity: .72; white-space: nowrap; margin-top: 2px; }
+  .cgu-chat.cgu-warn { color: #d97757; opacity: .95; }
   @media (prefers-color-scheme: light) {
     .cgu-bar { border-color: #bfbfbf; }
     .cgu-fill { background: #5aa6ff; }
@@ -151,6 +153,108 @@
   }
 
   /* ------------------------------------------------------------------ *
+   * How big this chat is
+   * ------------------------------------------------------------------ *
+   *
+   * A size, deliberately without a percentage. Two checks on 26 Sep 2026
+   * ruled out anything more. The reply stream from /backend-api/f/conversation
+   * carries no usage figures at all, only markers and the plan type. And
+   * OpenAI no longer publishes a context window for ChatGPT plans: the pricing
+   * page says "Expanded memory" for Plus and "Maximum memory and context" for
+   * Pro, and the GPT-5.6 help article does not mention context. A fill level
+   * with no known ceiling would be invented, so there isn't one.
+   *
+   * What is counted is the live branch of the conversation, walked back from
+   * current_node through each parent, at about four characters a token, which
+   * is OpenAI's own rule of thumb for English. Thinking and reasoning recaps
+   * are skipped on the assumption that they are not resent. Custom
+   * instructions, memory and the system prompt are not in the stored
+   * conversation and are not counted.
+   *
+   * context_truncation_continuation sits on every conversation and was null on
+   * all fifteen checked. The name says it fills in when ChatGPT has to cut
+   * earlier turns to continue. That reading is inferred, never observed, so
+   * the flag says "trimmed" and the tooltip says where the guess comes from.
+   */
+  let chatLine = null;
+  let chatFor = null, chatBusy = false;
+
+  function convIdFromPath() {
+    const m = location.pathname.match(/\/c\/([0-9a-f-]{36})/i);
+    return m ? m[1] : null;
+  }
+
+  async function fetchChatSize(id) {
+    const t = await getToken();
+    if (!t) return null;
+    const r = await fetch(`/backend-api/conversation/${id}`, {
+      headers: { accept: 'application/json', authorization: 'Bearer ' + t },
+    });
+    if (!r.ok) return null;
+    const d = await r.json();
+    const map = d.mapping || {};
+    let chars = 0, turns = 0;
+    const seen = new Set();
+    for (let node = map[d.current_node]; node && !seen.has(node.id); node = map[node.parent]) {
+      seen.add(node.id);
+      const m = node.message;
+      if (!m || !m.content) continue;
+      const ct = m.content.content_type;
+      if (ct === 'thoughts' || ct === 'reasoning_recap') continue;
+      (Array.isArray(m.content.parts) ? m.content.parts : []).forEach((p) => {
+        if (typeof p === 'string') chars += p.length;
+      });
+      if (typeof m.content.text === 'string') chars += m.content.text.length;
+      const role = m.author && m.author.role;
+      if (role === 'user' || role === 'assistant') turns++;
+    }
+    return {
+      tokens: Math.round(chars / 4),
+      turns,
+      trimmed: d.context_truncation_continuation != null,
+      model: d.default_model_slug || null,
+    };
+  }
+
+  function fmtK(n) {
+    if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+    if (n >= 1000) return Math.round(n / 1000) + 'k';
+    return String(n);
+  }
+
+  async function refreshChat(force) {
+    if (!chatLine) return;
+    const id = convIdFromPath();
+    if (!id) { chatLine.style.display = 'none'; chatFor = null; return; }
+    if (chatBusy || (!force && id === chatFor)) return;
+    chatBusy = true;
+    try {
+      const s = await fetchChatSize(id);
+      if (!s || convIdFromPath() !== id) return;
+      chatFor = id;
+      chatLine.style.display = '';
+      chatLine.textContent = `This chat · ≈${fmtK(s.tokens)} tokens`
+        + (s.trimmed ? ' · earlier turns trimmed' : '');
+      chatLine.classList.toggle('cgu-warn', s.trimmed);
+      chatLine.title = `About ${s.tokens.toLocaleString()} tokens across ${s.turns} messages `
+        + 'on the live branch of this chat, at roughly four characters a token.'
+        + (s.model ? ` Running ${s.model}.` : '')
+        + '\n\nNot counted: custom instructions, memory and the system prompt, which '
+        + 'are not stored with the conversation. The real figure is higher.'
+        + '\n\nNo percentage, because ChatGPT reports no usage in its reply stream and '
+        + 'OpenAI publishes no context window for ChatGPT plans, both checked on '
+        + '26 Sep 2026.'
+        + (s.trimmed
+          ? '\n\nChatGPT has marked this chat with context_truncation_continuation. '
+            + 'The name suggests earlier turns were cut to keep going, which is a '
+            + 'reading of the field name rather than anything documented. Worth '
+            + 'starting a fresh chat with a summary if the early detail matters.'
+          : '');
+    } catch (e) { /* keep the last reading */ }
+    finally { chatBusy = false; }
+  }
+
+  /* ------------------------------------------------------------------ *
    * Rendering
    * ------------------------------------------------------------------ */
   let pill = null, head = null, rows = [], note = null;
@@ -193,6 +297,11 @@
 
     rows = [makeRow(), makeRow()];
     rows.forEach((r) => pill.appendChild(r.row));
+
+    chatLine = document.createElement('div');
+    chatLine.className = 'cgu-chat';
+    chatLine.style.display = 'none';
+    pill.appendChild(chatLine);
 
     note = document.createElement('div');
     note.className = 'cgu-note';
@@ -371,10 +480,31 @@
     };
   }
 
+  /*
+   * When the chat size is re-read. Opening a different chat changes the path.
+   * A finished reply adds an assistant message to the page without changing
+   * the path, so the count of those is watched, and the read waits a moment
+   * for the reply to be saved. A slow poll covers anything both miss.
+   */
+  let lastAssistantCount = -1, chatTimer = null;
+  function watchChat() {
+    const id = convIdFromPath();
+    if (id !== chatFor) { refreshChat(false); return; }
+    const n = document.querySelectorAll('[data-message-author-role="assistant"]').length;
+    if (n !== lastAssistantCount) {
+      lastAssistantCount = n;
+      clearTimeout(chatTimer);
+      chatTimer = setTimeout(() => refreshChat(true), 2500);
+    }
+  }
+
   function start() {
     injectStyles();
     refresh();
     setInterval(refresh, CONFIG.refreshMs);
+    Promise.resolve().then(() => refreshChat(true));
+    setInterval(watchChat, 1000);
+    setInterval(() => { if (convIdFromPath()) refreshChat(true); }, 30000);
 
     // A panel opening or the window resizing both move the right edge.
     new MutationObserver(throttle(() => {

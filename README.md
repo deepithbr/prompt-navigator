@@ -30,6 +30,7 @@ Works as a Chrome extension or as two Tampermonkey userscripts. The files are th
 **On `chatgpt.com`**
 
 - Plan type and the agent/task usage window, with the same elapsed-time marker
+- In a conversation, roughly how many tokens the chat holds. A size only, with no percentage, because ChatGPT reports no usage and OpenAI publishes no context window for ChatGPT plans. It turns amber if ChatGPT marks the chat as trimmed
 
 ---
 
@@ -78,8 +79,9 @@ On `chatgpt.com`:
 |---|---|
 | `/api/auth/session` | the bearer token the next call needs |
 | `/backend-api/codex/usage` | plan type, percent used, window length, reset time |
+| `/backend-api/conversation/{id}` | the open chat, to measure its size |
 
-**Read this before installing the ChatGPT half.** It reads your session access token in order to call the usage endpoint, exactly as the ChatGPT page does. The token never leaves the tab, but you should not take that on trust from a README — read `chatgpt-usage.user.js`, it is short and the two `fetch` calls are the only network activity in it. If you would rather not, delete that file and remove its entry from `manifest.json`; the Claude half is entirely independent.
+**Read this before installing the ChatGPT half.** It reads your session access token in order to call the usage endpoint and to read the open conversation, exactly as the ChatGPT page does. The token never leaves the tab, but you should not take that on trust from a README. Read `chatgpt-usage.user.js`, it is short, and its three `fetch` calls, all to `chatgpt.com` itself, are the only network activity in it. If you would rather not, delete that file and remove its entry from `manifest.json`; the Claude half is entirely independent.
 
 ---
 
@@ -93,6 +95,7 @@ These are deliberate. Earlier versions guessed at them and the guesses were wron
 - **Cowork takes a few seconds to fill in.** A cowork session is not served by the conversation API. Its questions come from the session event log, which pages newest first and carries every tool result along with them, so a long session is several megabytes. There is no server-side filter for that: the page size is honoured, event type filters are ignored. The rail shows the mounted messages immediately and replaces them with the full list as the pages land, typically inside four seconds. Until then the header says `N on screen` rather than claiming a total it does not have yet.
 - **Cowork outputs cannot be positioned.** They come from the session's own Outputs panel, cover the whole session, and are listed in creation order, but cowork exposes no message index to anchor a file to a question. They sit together at the end of the rail rather than being guessed into place. Clicking one opens it through Claude's own preview. If you hide the right-hand panel entirely the rail has nothing to read and the outputs disappear from it.
 - **ChatGPT message caps are not available.** `/backend-api/usage`, `/rate_limits` and `/conversation_limit` all return 404 and the model list carries no quota fields. Only the agent and task window is exposed, which is what the meter shows.
+- **ChatGPT context is a size, never a fill level.** Checked on 26 September 2026: the reply stream carries no usage figures, and neither the pricing page nor the GPT-5.6 help article gives a context window for ChatGPT plans. The size counts the live branch of the chat at about four characters a token and cannot see custom instructions, memory or the system prompt. The trimmed flag reads the `context_truncation_continuation` field, which was empty on every chat checked, so what it means is inferred from its name.
 - **Search covers titles everywhere, question text only where you have been.** claude.ai has no search endpoint, so the palette builds its own index. Thread titles are cheap and all of them are indexed. Question text is only indexed for threads you actually open, because fetching every thread up front measured at 5.7 minutes and 40MB. The index fills in as you use Claude normally.
 - **These are undocumented internal endpoints.** Anthropic and OpenAI can change them without notice, and when they do this breaks. There is a `MANUAL_SELECTOR` escape hatch at the top of the Claude script for the most likely breakage.
 
