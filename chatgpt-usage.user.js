@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Usage Meter
 // @namespace    local.deepith
-// @version      1.3.0
+// @version      1.3.1
 // @description  Shows your ChatGPT plan usage as a bar with a window-elapsed marker, the same reading as the Claude Prompt Navigator header. Companion script — ChatGPT is a different origin, so this cannot live inside the claude.ai one.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -364,18 +364,55 @@
   }
 
   let lastOffset = -1;
+  /*
+   * The chat area is not a side panel, and on ChatGPT shape alone cannot tell
+   * them apart.
+   *
+   * With the sidebar open, the chat area starts well inside the window, runs
+   * flush to the right edge and is tall, which is every test this used to
+   * apply. Measured on 28 Sep 2026 at 1536px wide it came to left 341, width
+   * 1195, so the pill stepped aside by the whole chat area and landed on the
+   * sidebar. Two blocks matched at that geometry, and one of them does not
+   * even contain the composer, so asking "does it hold the composer" is not
+   * enough on its own here.
+   *
+   * What does separate them is where the composer sits. A real side panel,
+   * canvas or any other, pushes the conversation to its left, so the composer
+   * ends before the panel begins. The chat area has the composer inside its
+   * span. So a block only counts as a panel when the composer is entirely to
+   * its left, and with no composer on the page nothing moves.
+   *
+   * The composer is the ProseMirror box ChatGPT labels "Ask ChatGPT", inside
+   * the page's one form. The old #prompt-textarea id no longer exists.
+   */
+  const PANEL_MIN_REMAINING = 420;
+
+  function composerRect() {
+    const box = document.querySelector('form [contenteditable="true"][role="textbox"]')
+      || document.querySelector('[contenteditable="true"][role="textbox"]')
+      || document.querySelector('#prompt-textarea');
+    if (!box) return null;
+    const form = box.closest('form');
+    return (form || box).getBoundingClientRect();
+  }
+
   function syncOffset() {
     if (!pill || CONFIG.position === 'bottom-left') return;
     const vw = window.innerWidth, vh = window.innerHeight;
+    const comp = composerRect();
     let edge = vw;
-    for (const el of document.querySelectorAll('div,aside,section')) {
-      if (el === pill || pill.contains(el)) continue;
-      const r = el.getBoundingClientRect();
-      if (r.width < 200 || r.width > vw * 0.8) continue;
-      if (r.height < vh * 0.35) continue;
-      if (Math.abs(r.right - vw) > 10) continue;
-      if (r.left <= vw * 0.15) continue;
-      if (r.left < edge) edge = r.left;
+    if (comp) {
+      for (const el of document.querySelectorAll('div,aside,section')) {
+        if (el === pill || pill.contains(el)) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width < 200 || r.width > vw * 0.8) continue;
+        if (r.height < vh * 0.35) continue;
+        if (Math.abs(r.right - vw) > 10) continue;
+        if (r.left <= vw * 0.15) continue;
+        if (r.left < PANEL_MIN_REMAINING) continue;
+        if (comp.right > r.left + 8) continue;   // composer overlaps it, so it is the chat
+        if (r.left < edge) edge = r.left;
+      }
     }
     const offset = Math.max(0, Math.round(vw - edge)) + CONFIG.gap;
     if (offset === lastOffset) return;
