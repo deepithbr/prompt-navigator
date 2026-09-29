@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Prompt Advisor
 // @namespace    local.deepith
-// @version      1.0.0
+// @version      1.1.0
 // @description  Reads the prompt you are typing on claude.ai or chatgpt.com and says which model and effort level it needs, when that differs from what you have picked.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -39,8 +39,8 @@
  *
  * Why this cannot be exact. A prompt shows its task, not its difficulty.
  * "Now do the same for sem 4" looks trivial and leans on the whole thread.
- * That is why the hint only speaks on a new chat, or on a long prompt in an
- * existing one, and why it reports the signals it acted on so you can overrule
+ * So in an existing thread a follow-up borrows the reading of the question it
+ * follows, and the hint reports the signals it acted on so you can overrule
  * it knowingly. It keeps a local count of how often you follow it. If you
  * overrule it on more than one prompt in four, the rules are too crude and a
  * model-based check would be worth its cost.
@@ -49,12 +49,16 @@
 (function () {
   'use strict';
 
+  // The extension and the userscript can both be installed. One hint is enough.
+  if (window.__promptAdvisor) return;
+  window.__promptAdvisor = true;
+
   const SITE = /chatgpt\.com|chat\.openai\.com/.test(location.host) ? 'chatgpt' : 'claude';
 
   const CONFIG = {
     debounceMs: 400,
     minChars: 15,            // below this there is nothing to judge
-    followUpMinChars: 600,   // an existing thread only hears from us on a big prompt
+    rereadTokens: 20000,     // past this, a mid-thread switch costs more than a summary
   };
 
   /* ------------------------------------------------------------------ *
@@ -92,7 +96,8 @@
 
   // Judgment: a decision with trade-offs, or a view that has to be defended.
   const JUDGMENT = [
-    ['should we', /\bshould (we|i|they|he|she|the)\b/],
+    // Spelled the way people type when they are in a hurry, too.
+    ['should we', /\b(should|shud|shld|shd) (we|i|they|he|she|the|u|you)\b/],
     ['trade-offs', /\b(trade-?offs?|pros and cons|weigh (up )?|dilemma|downsides?)\b/],
     ['strategy', /\b(strategy|strategic|positioning|roadmap|long[- ]term|go-to-market)\b/],
     ['decide or recommend', /\b(decide|decision|recommend(ation)?|which (one|option|approach|path|of these) (is|should|would|to))\b/],
@@ -223,6 +228,112 @@
   }
 
   /* ------------------------------------------------------------------ *
+   * The thread
+   *
+   * Filled from window.__promptThread, which the Prompt Navigator and the
+   * ChatGPT meter leave there. Without them a follow-up cannot be judged and
+   * the advisor says nothing about it rather than guess.
+   * ------------------------------------------------------------------ */
+
+  // Words that point back at the thread rather than stating a task.
+  const BACKREF = /\b(the same|same (for|with|way|thing|format|again)|again|above|earlier|previous|continue|carry on|go ahead|proceed|as before|like before|similar(ly)?|likewise|next one|another one|redo|now do|do it|do that|do this|the rest|remaining|as well|too)\b|^(yes|yeah|yep|ok(ay)?|sure|great|perfect|thanks|good|fine|right|no|nope)\b/;
+
+  function isFollowUp(text) {
+    return text.length < 300 && BACKREF.test(text.toLowerCase());
+  }
+
+  /*
+   * A follow-up is judged by the question it follows. "Same for sem 4" after a
+   * question paper with seven constraints is that question paper again. Walk
+   * back past earlier follow-ups to the last question that stated a task, and
+   * take the heavier reading on each axis.
+   */
+  function inherit(a, text, asked) {
+    if (!isFollowUp(text)) return a;
+    const list = asked || [];
+    for (let i = list.length - 1, n = 0; i >= 0 && n < 6; i--, n++) {
+      const q = list[i];
+      if (!q || isFollowUp(q)) continue;
+      const p = audit(q, {});
+      const snip = q.length > 60 ? q.slice(0, 57) + '…' : q;
+      return {
+        ...a,
+        kind: Math.max(a.kind, p.kind),
+        depth: Math.max(a.depth, p.depth),
+        stakes: a.stakes || p.stakes,
+        why: [`follows up on "${snip}"`, ...p.why],
+        depthWhy: p.depthWhy,
+        followUp: true,
+      };
+    }
+    return { ...a, followUp: true, unjudged: true };
+  }
+
+  function fmtK(n) {
+    if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+    if (n >= 1000) return Math.round(n / 1000) + 'K';
+    return String(n);
+  }
+
+  /*
+   * When a new chat beats carrying on.
+   *
+   * Three cases. Near compaction, Claude is about to summarise earlier turns
+   * on its own terms, so do it on yours. On a thread past the "getting long"
+   * band, a prompt that is not a follow-up is a new task paying to reread a
+   * conversation it does not need. And any change of model or effort mid-thread
+   * rereads the whole thread without the cache: changing effort invalidates the
+   * prompt cache the same way changing model does [Claude Platform Docs, Prompt
+   * caching]. Past a modest size, a short summary in a new chat is cheaper
+   * than that reread.
+   *
+   * ChatGPT publishes no context window, so there the only signal is ChatGPT's
+   * own flag that it trimmed earlier turns.
+   */
+  /*
+   * Returns { text, soft } or null. A soft one is the wrap-up warning: the
+   * thread is long but this prompt belongs to it, so finish here and move for
+   * the next task. It shows once per thread per band, not on every prompt.
+   */
+  function handoffWhy(adv, a, thread) {
+    if (!thread) return null;
+    if (thread.site === 'chatgpt') {
+      return thread.trimmed ? { text: 'ChatGPT has trimmed earlier turns' } : null;
+    }
+    if (thread.band === 'near compaction') return { text: 'thread is near compaction' };
+    // Work that draws on the whole thread has to stay in it. A summary would
+    // drop the detail the work needs, so it takes the switch and pays the reread.
+    if (a.spansThread) return null;
+    if (thread.band === 'getting long' && !a.followUp) {
+      return { text: 'long thread, and this reads as a new task' };
+    }
+    if (adv && !adv.agree && thread.tokens >= CONFIG.rereadTokens) {
+      return { text: 'switching mid-thread rereads ~' + fmtK(thread.tokens) + ' tokens' };
+    }
+    if (thread.band === 'getting long') {
+      return { text: 'thread getting long, finish this task here and start fresh for the next', soft: true };
+    }
+    return null;
+  }
+
+  // Asking for work that spans the thread. On a long thread that is many
+  // dependent steps whatever the wording, so it earns a step more effort.
+  const SPANS_THREAD = /\b(everything (above|so far|we('ve| have) (done|discussed|decided))|all of (the )?above|whole (thread|conversation|chat)|consolidat\w*|combine (all|everything|them)|merge (all|everything|them)|final version|pull (it|this|everything) together|across (all|every) )/;
+
+  function longThreadDepth(a, text, thread) {
+    if (!thread || !SPANS_THREAD.test(text.toLowerCase())) return a;
+    const long = thread.band ? thread.band !== 'plenty of room' : thread.tokens >= 50000;
+    if (!long) return { ...a, spansThread: true };
+    return {
+      ...a,
+      spansThread: true,
+      depth: Math.min(3, a.depth + 1),
+      depthWhy: [...a.depthWhy.filter((d) => d !== 'no multi-step reasoning found'),
+        'draws on a ' + fmtK(thread.tokens) + '-token thread'],
+    };
+  }
+
+  /* ------------------------------------------------------------------ *
    * Claude: the grid
    * ------------------------------------------------------------------ */
 
@@ -254,7 +365,7 @@
     if (model === 'haiku' && a.stakes) { model = 'sonnet'; effort = 0; }
     // Haiku's window is 200K tokens [Claude Help Center, context windows on
     // paid plans]. Leave headroom for the reply.
-    if (model === 'haiku' && a.tokens > 150000) { model = 'sonnet'; effort = 0; }
+    if (model === 'haiku' && a.tokens + (a.threadTokens || 0) > 150000) { model = 'sonnet'; effort = 0; }
     return { model, effort };
   }
 
@@ -371,6 +482,18 @@
       : /\/c\/[0-9a-z-]+/i.test(location.pathname);
   }
 
+  function threadId() {
+    const m = SITE === 'claude' ? location.pathname.match(/\/chat\/([0-9a-f-]{36})/i)
+      : location.pathname.match(/\/c\/([0-9a-z-]+)/i);
+    return m ? m[1] : null;
+  }
+
+  function threadFor() {
+    const t = window.__promptThread;
+    const id = threadId();
+    return t && id && t.id === id ? t : null;
+  }
+
   function blocked() {
     // Cowork runs its own agent models, not the chat picker.
     return SITE === 'claude' && /\/cowork\//.test(location.pathname);
@@ -392,6 +515,10 @@
   .cpa-hint .cpa-why { opacity: 0.6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .cpa-hint button { all: unset; cursor: pointer; opacity: 0.5; padding: 0 4px; font-size: 14px; line-height: 1; }
   .cpa-hint button:hover { opacity: 1; }
+  .cpa-hint button.cpa-act { opacity: 1; font-size: 12px; padding: 2px 8px; border-radius: 6px;
+    background: rgba(217,119,87,0.18); color: inherit; }
+  .cpa-hint button.cpa-act:hover { background: rgba(217,119,87,0.32); }
+  .cpa-hint button.cpa-act[hidden] { display: none; }
   .cpa-card { position: fixed; z-index: 2147483001; display: none; width: 340px;
     font: 12px/1.45 ui-sans-serif, system-ui, "Segoe UI", sans-serif; color: #e6e4df;
     background: #201f1e; border: 1px solid rgba(140,135,125,0.35); border-radius: 10px;
@@ -419,8 +546,12 @@
     (document.head || document.documentElement).appendChild(t);
   }
 
-  let hint = null, hintText = null, hintWhy = null, cardEl = null;
-  let lastAudit = null, lastAdvice = null;
+  let hint = null, hintText = null, hintWhy = null, hintAct = null, cardEl = null;
+  let lastAudit = null, lastAdvice = null, lastThread = null, lastHandoff = null;
+  let noteFor = null;         // the start of the summary request we put in the box
+  let lastSoft = false;       // the current hint is the wrap-up warning
+  const wrapSeen = new Set(); // thread|band pairs whose wrap-up warning you have seen
+  let summarised = false;     // you took the new-chat route for this draft
   let dismissedFor = null;    // the draft text you closed the hint on
   let draftHinted = false;    // a hint showed at some point for this draft
   let timer = null;
@@ -438,15 +569,53 @@
     x.title = 'Hide for this prompt';
     x.addEventListener('click', () => {
       const b = box();
+      if (lastSoft && lastThread) wrapSeen.add(lastThread.id + '|' + lastThread.band);
       dismissedFor = b ? b.innerText.trim() : '';
       hide();
     });
-    hint.append(dot, hintText, hintWhy, x);
+    hintAct = document.createElement('button');
+    hintAct.className = 'cpa-act';
+    hintAct.textContent = 'Summarise';
+    hintAct.title = 'Put a request for a short handover into the box, with your prompt kept at the end';
+    hintAct.hidden = true;
+    hintAct.addEventListener('click', summarise);
+    hint.append(dot, hintText, hintWhy, hintAct, x);
     cardEl = document.createElement('div');
     cardEl.className = 'cpa-card';
     hint.addEventListener('mouseenter', showCard);
     hint.addEventListener('mouseleave', () => cardEl.classList.remove('cpa-on'));
     document.body.append(hint, cardEl);
+  }
+
+  const HANDOFF_ASK = 'Before I move to a new chat, write a handover I can paste into it. '
+    + 'Keep it under 400 words. Include the goal, the decisions we made and why, the current '
+    + 'state of every document or piece of code we produced, the constraints I set, and the '
+    + 'open questions. Leave out anything settled that the next chat will not need.';
+
+  /*
+   * Swap the draft for a summary request that carries the draft at its end,
+   * so nothing you typed is lost. The summary runs on this thread, where the
+   * cache makes rereading it cheapest, and its reply is what you paste into
+   * the new chat.
+   */
+  function summarise() {
+    const b = box();
+    if (!b) return;
+    const draft = (b.innerText || '').trim();
+    const ask = HANDOFF_ASK + (draft
+      ? '\n\nAfter the handover, repeat my next request exactly as written:\n\n' + draft : '');
+    const target = lastAdvice && !lastAdvice.agree ? lastAdvice.label : null;
+    b.focus();
+    document.execCommand('selectAll', false, null);
+    document.execCommand('insertText', false, ask);
+    noteFor = ask.slice(0, 60);
+    summarised = true;
+    hintText.textContent = 'Send this, then paste the reply into a new chat'
+      + (target ? ' on ' + target : '') + '.';
+    hintWhy.textContent = '';
+    hintAct.hidden = true;
+    cardEl.classList.remove('cpa-on');
+    place();
   }
 
   function hide() {
@@ -474,14 +643,24 @@
     const KIND = ['Transform', 'Create or analyse', 'Judgment'];
     const DEPTH = ['One shot', 'Some steps', 'Many dependent steps', 'Hard reasoning'];
     const st = stats();
+    const t = lastThread;
     const rows = [
       ['You picked', lastAdvice.cur],
-      ['Suggested', lastAdvice.label],
+      ['Suggested', lastAdvice.agree ? 'Keep it' : lastAdvice.label],
       ['Kind', KIND[a.kind] + '. ' + a.why.join('. ')],
       ['Reasoning', DEPTH[a.depth] + '. ' + a.depthWhy.join(', ')],
       ['Size', '~' + a.tokens.toLocaleString() + ' tokens typed'
         + (a.attachments ? ', plus ' + a.attachments + ' attachment' + (a.attachments > 1 ? 's' : '') + ' of unknown size' : '')],
     ];
+    if (existingThread()) {
+      rows.push(['Thread', !t ? 'not read yet'
+        : '~' + fmtK(t.tokens) + ' tokens' + (t.window ? ' of a ' + fmtK(t.window) + ' window, ' + t.band : '')
+          + (t.trimmed ? ', earlier turns trimmed' : '')]);
+    }
+    if (lastHandoff) {
+      rows.push(['New chat', lastHandoff + '. Summarise puts a handover request in the box, '
+        + 'with your prompt kept at the end.']);
+    }
     cardEl.textContent = '';
     const h = document.createElement('h4');
     h.textContent = SITE === 'claude'
@@ -498,7 +677,7 @@
       ? 'Per token, Opus 5.5 costs twice Sonnet 5.5 and four times Haiku 4.5 on the API. '
       : '')
       + 'Read from the words only, so it cannot see how hard the thread behind them is. '
-      + (existingThread() ? 'Switching model mid-thread probably means the new model rereads the whole thread uncached. ' : '')
+      + (existingThread() ? "Changing model or effort mid-thread rereads the thread without the cache, per Claude's prompt caching docs. " : '')
       + (st.hinted ? `You have followed ${st.followed} of ${st.hinted} hints here.` : '');
     cardEl.append(h, dl, p);
     cardEl.classList.add('cpa-on');
@@ -513,25 +692,56 @@
     const b = box();
     if (!b || blocked()) { hide(); return; }
     const text = (b.innerText || '').trim();
-    if (!text) { dismissedFor = null; draftHinted = false; }
+    if (!text) { dismissedFor = null; draftHinted = false; noteFor = null; summarised = false; }
+    // Leave the "send this, then paste" note up while the summary request sits
+    // in the box.
+    if (noteFor && text.startsWith(noteFor)) { place(); return; }
     const c = card(b);
     const att = attachments(c);
     if (text.length < CONFIG.minChars && !att) { hide(); return; }
-    if (existingThread() && text.length < CONFIG.followUpMinChars && !att) { hide(); return; }
     if (dismissedFor !== null && text.startsWith(dismissedFor.slice(0, 40))) { hide(); return; }
 
-    const a = audit(text, { attachments: att });
+    const thread = existingThread() ? threadFor() : null;
+    let a = audit(text, { attachments: att });
+    if (existingThread()) {
+      a = inherit(a, text, thread && thread.questions);
+      // A follow-up with nothing to follow: silence beats a guess from its words.
+      if (a.unjudged) { hide(); return; }
+    }
+    a = longThreadDepth(a, text, thread);
+    a.threadTokens = thread ? thread.tokens : 0;
     const adv = SITE === 'claude' ? claudeAdvice(a) : gptAdvice(a);
+    let move = handoffWhy(adv, a, thread);
+    // The wrap-up warning has said its piece once you send a prompt past it.
+    if (move && move.soft && (!adv || adv.agree) && wrapSeen.has(thread.id + '|' + thread.band)) move = null;
+    const why = move && move.text;
     lastAudit = a;
     lastAdvice = adv;
-    if (!adv || adv.agree) { hide(); return; }
+    lastThread = thread;
+    lastHandoff = why;
+    lastSoft = !!(move && move.soft);
+    if (!why && (!adv || adv.agree)) { hide(); return; }
 
     hintText.textContent = '';
     const bold = document.createElement('b');
-    bold.textContent = adv.label;
-    hintText.append(bold, document.createTextNode(adv.dir < 0 ? ' would do this' : ' fits this better'));
-    hintWhy.textContent = a.why[0];
-    hint.classList.toggle('cpa-up', adv.dir > 0);
+    if (lastSoft && adv && !adv.agree) {
+      bold.textContent = adv.label;
+      hintText.append(bold, document.createTextNode(adv.dir < 0 ? ' would do this' : ' fits this better'));
+    } else if (lastSoft) {
+      bold.textContent = 'Wrap up soon';
+    } else if (why && adv && !adv.agree) {
+      bold.textContent = adv.label;
+      hintText.append(bold, document.createTextNode(' in a new chat'));
+    } else if (why) {
+      bold.textContent = 'A new chat';
+      hintText.append(bold, document.createTextNode(' would serve this better'));
+    } else {
+      bold.textContent = adv.label;
+      hintText.append(bold, document.createTextNode(adv.dir < 0 ? ' would do this' : ' fits this better'));
+    }
+    hintWhy.textContent = why || a.why[0];
+    hintAct.hidden = !why;
+    hint.classList.toggle('cpa-up', !why && !!adv && adv.dir > 0);
     hint.classList.add('cpa-on');
     draftHinted = true;
     place();
@@ -546,13 +756,16 @@
   // pick agreed with it by the time you sent, which is the only way the hint
   // goes quiet without the close button.
   function onSend() {
+    if (lastSoft && lastThread) wrapSeen.add(lastThread.id + '|' + lastThread.band);
     if (!draftHinted) return;
     const st = stats();
     st.hinted += 1;
-    if (lastAdvice && lastAdvice.agree && dismissedFor === null) st.followed += 1;
+    if (summarised || (lastAdvice && lastAdvice.agree && !lastHandoff && dismissedFor === null)) st.followed += 1;
     try { localStorage.setItem('cpa-stats', JSON.stringify(st)); } catch (e) {}
     draftHinted = false;
     dismissedFor = null;
+    summarised = false;
+    noteFor = null;
     hide();
   }
 

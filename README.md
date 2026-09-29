@@ -35,7 +35,9 @@ Works as a Chrome extension or as two Tampermonkey userscripts. The files are th
 **On both sites, as you type**
 
 - One line above the text box when the model or effort you picked is heavier or lighter than the prompt needs, such as **Sonnet 5.5 · Medium would do this**. Hover it for the audit behind the call
-- Silent when your pick already fits, and silent on short follow-ups in an existing thread, because a follow-up's difficulty lives in the thread, not in its words
+- Silent when your pick already fits
+- In an existing thread, a follow-up such as "now do the same for sem 4" is judged by the question it follows, because its difficulty lives in the thread, not in its own words
+- As the thread grows it weighs the thread too. A new task on a long thread, any switch of model or effort on a thread past about 20K tokens, and every prompt near compaction get a suggestion to move to a new chat, with a **Summarise** button that puts a short handover request in the box and keeps your prompt at the end. A follow-up on a long thread gets a one-time "wrap up soon". Work that draws on the whole thread, such as "consolidate everything above", stays in the thread and gets a step more effort instead
 - It never switches anything for you and never sends the prompt anywhere
 
 It scores each prompt on two separate axes, because model and effort buy different things. The kind of thinking picks the model: a rewrite or summary needs no judgment, writing and analysis sit with Sonnet, and a decision with trade-offs or stakes goes to Opus. The depth of reasoning picks the effort: steps that depend on each other, constraints to hold at once, sums to check, a bug to trace.
@@ -48,7 +50,11 @@ It scores each prompt on two separate axes, because model and effort buy differe
 
 Stakes move a prompt in the direction its errors come from. On writing or analysis about fees, contracts, hiring or accreditation the model goes up, because a wrong call there is a judgment error. On a calculation about the same things the effort goes up instead, because a wrong sum is a slipped step, and a bigger model doesn't prevent that. Max effort and Fable 5.1 are never suggested. The picker itself warns that Max costs 5.5 times or more, and nothing in a single prompt shows the long autonomous work Fable is built for.
 
-On ChatGPT there is one model to choose, so only the thinking-effort slider is advised.
+Why a switch on a big thread becomes "move to a new chat": changing model or effort mid-thread makes the next reply reread the whole thread without the prompt cache, per Claude's prompt caching docs. Past a modest size, a 400-word handover in a fresh chat is cheaper than that reread.
+
+On ChatGPT there is one model to choose, so only the thinking-effort slider is advised. ChatGPT publishes no context window, so there the only new-chat signal is ChatGPT's own flag that it trimmed earlier turns.
+
+The thread size and earlier questions come from the Prompt Navigator and the ChatGPT meter. Without them the advisor still judges new chats, but stays quiet on follow-ups rather than guess.
 
 ---
 
@@ -116,7 +122,7 @@ These are deliberate. Earlier versions guessed at them and the guesses were wron
 - **ChatGPT message caps are not available.** `/backend-api/usage`, `/rate_limits` and `/conversation_limit` all return 404 and the model list carries no quota fields. Only the agent and task window is exposed, which is what the meter shows.
 - **ChatGPT context is a size, never a fill level.** Checked on 26 September 2026: the reply stream carries no usage figures, and neither the pricing page nor the GPT-5.6 help article gives a context window for ChatGPT plans. The size counts the live branch of the chat at about four characters a token and cannot see custom instructions, memory or the system prompt. The trimmed flag reads the `context_truncation_continuation` field, which was empty on every chat checked, so what it means is inferred from its name.
 - **Search covers titles everywhere, question text only where you have been.** claude.ai has no search endpoint, so the palette builds its own index. Thread titles are cheap and all of them are indexed. Question text is only indexed for threads you actually open, because fetching every thread up front measured at 5.7 minutes and 40MB. The index fills in as you use Claude normally.
-- **The prompt advisor reads words, not difficulty.** "Now do the same for sem 4" looks trivial and leans on everything the thread built, which is why it only speaks on a new chat or a long prompt. It is local pattern rules, and it will sometimes call a short judgment question simple. Hover the hint to see which signals it acted on. The card also shows how many of its hints you have followed. If you overrule it on more than one prompt in four, the rules are too crude for how you write.
+- **The prompt advisor reads words, not difficulty.** "Now do the same for sem 4" looks trivial and leans on everything the thread built, which is why a follow-up borrows the reading of the question before it. It is local pattern rules, and it will sometimes call a short judgment question simple. Hover the hint to see which signals it acted on. The card also shows how many of its hints you have followed. If you overrule it on more than one prompt in four, the rules are too crude for how you write.
 - **These are undocumented internal endpoints.** Anthropic and OpenAI can change them without notice, and when they do this breaks. There is a `MANUAL_SELECTOR` escape hatch at the top of the Claude script for the most likely breakage.
 
 ---

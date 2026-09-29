@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Usage Meter
 // @namespace    local.deepith
-// @version      1.3.1
+// @version      1.3.2
 // @description  Shows your ChatGPT plan usage as a bar with a window-elapsed marker, the same reading as the Claude Prompt Navigator header. Companion script — ChatGPT is a different origin, so this cannot live inside the claude.ai one.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -194,6 +194,7 @@
     const d = await r.json();
     const map = d.mapping || {};
     let chars = 0, turns = 0;
+    const asked = [];
     const seen = new Set();
     for (let node = map[d.current_node]; node && !seen.has(node.id); node = map[node.parent]) {
       seen.add(node.id);
@@ -207,10 +208,16 @@
       if (typeof m.content.text === 'string') chars += m.content.text.length;
       const role = m.author && m.author.role;
       if (role === 'user' || role === 'assistant') turns++;
+      if (role === 'user') {
+        const said = (Array.isArray(m.content.parts) ? m.content.parts : [])
+          .filter((p) => typeof p === 'string').join(' ').trim();
+        if (said) asked.push(said);
+      }
     }
     return {
       tokens: Math.round(chars / 4),
       turns,
+      questions: asked.reverse(),   // walked leaf to root, so flip to oldest first
       trimmed: d.context_truncation_continuation != null,
       model: d.default_model_slug || null,
     };
@@ -232,6 +239,11 @@
       const s = await fetchChatSize(id);
       if (!s || convIdFromPath() !== id) return;
       chatFor = id;
+      // For the prompt advisor, which shares this page. See prompt-advisor.user.js.
+      window.__promptThread = {
+        site: 'chatgpt', id, tokens: s.tokens, window: null,
+        trimmed: s.trimmed, questions: s.questions,
+      };
       chatLine.style.display = '';
       chatLine.textContent = `This chat · ≈${fmtK(s.tokens)} tokens`
         + (s.trimmed ? ' · earlier turns trimmed' : '');

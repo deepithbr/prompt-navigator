@@ -5,7 +5,9 @@ const path = require('path');
 const src = fs.readFileSync(path.join(__dirname, '..', 'prompt-advisor.user.js'), 'utf8');
 const from = src.indexOf('  // Kind of thinking, lightest first.');
 const to = src.indexOf('  /* The button reads');
-const { audit, pick, NAMES, EFFORTS } = new Function(src.slice(from, to) + '\nreturn { audit, pick, NAMES, EFFORTS };')();
+const { audit, pick, NAMES, EFFORTS, inherit, handoffWhy, longThreadDepth } = new Function(
+  'const CONFIG = { rereadTokens: 20000 };\n' + src.slice(from, to)
+  + '\nreturn { audit, pick, NAMES, EFFORTS, inherit, handoffWhy, longThreadDepth };')();
 
 const cases = [
   // [prompt, expected model, expected effort or null]
@@ -33,6 +35,7 @@ const cases = [
   ['Review this contract clause and tell me if we are exposed.', 'opus', 1],
   ['Evaluate this essay against the rubric and give a mark out of 20.', 'sonnet', 0],
   ['hi', 'haiku', null],
+  ['Shud we follow this in our current CI for outputs..', 'opus', 1],
 ];
 
 let fail = 0;
@@ -44,6 +47,69 @@ for (const [p, m, e] of cases) {
   if (!ok) fail++;
   console.log((ok ? 'ok   ' : 'FAIL ') + got.padEnd(20) + ` k${a.kind} d${a.depth}  ` + p.slice(0, 70).replace(/\n/g, ' '));
   if (!ok) console.log('       want ' + NAMES[m] + (e == null ? '' : ' · ' + EFFORTS[e]) + ' | ' + a.why.join('; ') + ' | ' + a.depthWhy.join('; '));
+}
+// Follow-ups in an existing thread: [asked so far, draft, expected model, effort]
+const PAPER = cases[7][0];
+const FEE = 'Should we raise the BCA fee to 1.2 lakh next year?';
+const threads = [
+  [[PAPER], 'now do the same for sem 4', 'sonnet', 2],
+  [[PAPER, 'yes go ahead'], 'same for sem 5 as well', 'sonnet', 2],
+  [[FEE], 'ok, and the MCA fee too?', 'opus', 1],
+  [[FEE], 'Make this email more formal: hi all, lab shut tomorrow', 'haiku', null],
+];
+console.log('');
+for (const [asked, p, m, e] of threads) {
+  const a = inherit(audit(p, {}), p, asked);
+  const w = pick(a);
+  const got = NAMES[w.model] + (w.effort == null ? '' : ' · ' + EFFORTS[w.effort]);
+  const ok = w.model === m && w.effort === e;
+  if (!ok) fail++;
+  console.log((ok ? 'ok   ' : 'FAIL ') + got.padEnd(20) + ' follow-up  ' + p);
+}
+{
+  const p = 'now do the same for sem 4';
+  const ok = inherit(audit(p, {}), p, []).unjudged === true;
+  if (!ok) fail++;
+  console.log((ok ? 'ok   ' : 'FAIL ') + 'silent'.padEnd(20) + ' follow-up with no thread to follow');
+}
+
+// When a new chat beats carrying on: [name, advice, audit flags, thread, expect a reason]
+const AGREE = { agree: true }, CHANGE = { agree: false };
+const handoffs = [
+  ['near compaction', AGREE, {}, { site: 'claude', band: 'near compaction', tokens: 600000 }, true],
+  ['long thread, new task', AGREE, {}, { site: 'claude', band: 'getting long', tokens: 400000 }, true],
+  ['long thread, follow-up: wrap-up warning', AGREE, { followUp: true }, { site: 'claude', band: 'getting long', tokens: 400000 }, true],
+  ['roomy thread, follow-up', AGREE, { followUp: true }, { site: 'claude', band: 'plenty of room', tokens: 90000 }, false],
+  ['switch on a 48K thread', CHANGE, { followUp: true }, { site: 'claude', band: 'plenty of room', tokens: 48000 }, true],
+  ['switch on a 5K thread', CHANGE, {}, { site: 'claude', band: 'plenty of room', tokens: 5000 }, false],
+  ['ChatGPT trimmed', AGREE, {}, { site: 'chatgpt', trimmed: true, tokens: 9000 }, true],
+  ['ChatGPT not trimmed', CHANGE, {}, { site: 'chatgpt', trimmed: false, tokens: 90000 }, false],
+];
+console.log('');
+for (const [name, adv, a, th, want] of handoffs) {
+  const why = handoffWhy(adv, a, th);
+  const ok = !!why === want;
+  if (!ok) fail++;
+  console.log((ok ? 'ok   ' : 'FAIL ') + (why ? (why.soft ? 'soft: ' : '') + why.text : 'stay').slice(0, 60).padEnd(62) + ' ' + name);
+}
+// Work that spans a long thread earns a step more effort.
+{
+  const p = 'Write the final version of the syllabus, pulling everything above together.';
+  const long = { band: 'getting long', tokens: 380000 }, roomy = { band: 'plenty of room', tokens: 30000 };
+  const dl = longThreadDepth(audit(p, {}), p, long).depth, dr = longThreadDepth(audit(p, {}), p, roomy).depth;
+  const ok = dl === dr + 1;
+  if (!ok) fail++;
+  console.log('\n' + (ok ? 'ok   ' : 'FAIL ') + `depth ${dr} on a roomy thread, ${dl} on a long one  ` + p);
+}
+// Work that spans the thread stays in it, even when a switch is suggested.
+{
+  const p = 'Consolidate everything above into the final version of the proposal';
+  const th = { site: 'claude', band: 'getting long', tokens: 420000 };
+  const a = longThreadDepth(inherit(audit(p, {}), p, [FEE]), p, th);
+  const why = handoffWhy({ agree: false }, a, th);
+  const ok = why === null;
+  if (!ok) fail++;
+  console.log((ok ? 'ok   ' : 'FAIL ') + 'stays in the thread'.padEnd(62) + ' ' + p);
 }
 console.log(fail ? `\n${fail} failed` : '\nall passed');
 process.exit(fail ? 1 : 0);

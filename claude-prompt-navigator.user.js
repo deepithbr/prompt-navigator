@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Prompt Navigator
 // @namespace    local.deepith
-// @version      3.13.1
+// @version      3.13.2
 // @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it reads the session event log for the same complete list, and shows the files that session produced.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -1639,6 +1639,7 @@
     const band = frac >= CHAT_BAND.near ? 'near compaction'
       : frac >= CHAT_BAND.long ? 'getting long' : 'plenty of room';
 
+    publishThread(est, win, band);
     ctxLine.style.display = '';
     ctxLine.textContent = `Context · ${band}`;
     ctxLine.classList.toggle('cpn-warn', frac >= CHAT_BAND.near);
@@ -1697,6 +1698,21 @@
       ? 'This session has compacted, so its early detail now exists only as a '
         + 'summary. A handoff to a fresh session carries the full record.'
       : 'This session is close to compacting. A handoff now carries everything verbatim.');
+  }
+
+  /*
+   * What the prompt advisor needs from this thread, left on window because
+   * the two scripts share the page and nothing else. It judges a follow-up
+   * like "same for sem 4" by the question it follows, and weighs a model
+   * switch against rereading a thread this size.
+   */
+  function publishThread(tokens, win, band) {
+    const r = route();
+    if (!r || r.mode !== 'chat') return;
+    window.__promptThread = {
+      site: 'claude', id: r.id, tokens, window: win, band,
+      questions: questions.map((q) => q.text),
+    };
   }
 
   function nudgeHandoff(on, why) {
