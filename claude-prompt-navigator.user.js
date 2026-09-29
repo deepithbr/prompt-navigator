@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Prompt Navigator
 // @namespace    local.deepith
-// @version      3.13.0
+// @version      3.13.1
 // @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it reads the session event log for the same complete list, and shows the files that session produced.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -94,6 +94,9 @@
 
   /* Short names, so the header reads as a label rather than an id. */
   const MODEL_LABELS = {
+    'claude-fable-5-1': 'Fable 5.1',
+    'claude-opus-5-5': 'Opus 5.5',
+    'claude-sonnet-5-5': 'Sonnet 5.5',
     'claude-fable-5': 'Fable 5',
     'claude-mythos-5': 'Mythos 5',
     'claude-opus-5': 'Opus 5',

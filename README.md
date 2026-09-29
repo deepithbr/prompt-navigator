@@ -2,7 +2,7 @@
 
 A rail down the right edge of a Claude chat listing every question you asked, first to last, with the documents that thread produced marked in place. Click one to jump to it. The header shows which model and effort the chat is on, how big the conversation has grown, and how much of your plan you have used.
 
-Ships with a companion meter for ChatGPT that shows your agent and task allowance.
+Ships with a companion meter for ChatGPT that shows your agent and task allowance, and a prompt advisor for both sites that says which model and effort level a prompt needs before you send it.
 
 Works as a Chrome extension or as two Tampermonkey userscripts. The files are the same either way.
 
@@ -32,6 +32,24 @@ Works as a Chrome extension or as two Tampermonkey userscripts. The files are th
 - Plan type and the agent/task usage window, with the same elapsed-time marker
 - In a conversation, roughly how many tokens the chat holds. A size only, with no percentage, because ChatGPT reports no usage and OpenAI publishes no context window for ChatGPT plans. It turns amber if ChatGPT marks the chat as trimmed
 
+**On both sites, as you type**
+
+- One line above the text box when the model or effort you picked is heavier or lighter than the prompt needs, such as **Sonnet 5.5 · Medium would do this**. Hover it for the audit behind the call
+- Silent when your pick already fits, and silent on short follow-ups in an existing thread, because a follow-up's difficulty lives in the thread, not in its words
+- It never switches anything for you and never sends the prompt anywhere
+
+It scores each prompt on two separate axes, because model and effort buy different things. The kind of thinking picks the model: a rewrite or summary needs no judgment, writing and analysis sit with Sonnet, and a decision with trade-offs or stakes goes to Opus. The depth of reasoning picks the effort: steps that depend on each other, constraints to hold at once, sums to check, a bug to trace.
+
+| | One shot | Some steps | Many steps | Hard |
+|---|---|---|---|---|
+| **Transform** (rewrite, summarise, translate, extract) | Haiku 4.5 | Sonnet 5.5 · Low | Sonnet 5.5 · Medium | Sonnet 5.5 · High |
+| **Create or analyse** (write, explain, code, plan) | Sonnet 5.5 · Low | Sonnet 5.5 · Medium | Sonnet 5.5 · High | Opus 5.5 · High |
+| **Judgment** (should we, trade-offs, critique, strategy) | Opus 5.5 · Medium | Opus 5.5 · Medium | Opus 5.5 · High | Opus 5.5 · Extra |
+
+Stakes move a prompt in the direction its errors come from. On writing or analysis about fees, contracts, hiring or accreditation the model goes up, because a wrong call there is a judgment error. On a calculation about the same things the effort goes up instead, because a wrong sum is a slipped step, and a bigger model doesn't prevent that. Max effort and Fable 5.1 are never suggested. The picker itself warns that Max costs 5.5 times or more, and nothing in a single prompt shows the long autonomous work Fable is built for.
+
+On ChatGPT there is one model to choose, so only the thinking-effort slider is advised.
+
 ---
 
 ## Install as a Chrome extension
@@ -49,7 +67,7 @@ No permissions are requested. The extension declares no `permissions` and no `ho
 1. Install [Tampermonkey](https://www.tampermonkey.net/)
 2. Open `chrome://extensions`, enable Developer mode, open Tampermonkey's **Details**, and turn on **Allow user scripts** — Chrome 138 and later refuse to inject without this, and Tampermonkey fails silently rather than warning you
 3. Create a new script, paste in `claude-prompt-navigator.user.js`, save
-4. Repeat for `chatgpt-usage.user.js`
+4. Repeat for `chatgpt-usage.user.js` and `prompt-advisor.user.js`
 
 ---
 
@@ -60,6 +78,7 @@ Everything stays in your browser. Nothing is sent anywhere, and there is no serv
 Two things are stored locally, both on your own machine and neither ever transmitted:
 
 - a `localStorage` flag remembering whether you pinned the rail open
+- two small `localStorage` entries for the prompt advisor. `cpa-stats` counts how many of its hints you followed, and `cpa-gpt-levels` remembers the names of ChatGPT's thinking-effort stops as you open the slider on them
 - an IndexedDB database, `cpn-index`, holding your thread titles and the text of questions in threads you have opened, so the search palette can answer without a network round trip. Clearing site data for `claude.ai` removes it
 
 On `claude.ai` it calls the same endpoints the page itself calls, using your existing session:
@@ -97,6 +116,7 @@ These are deliberate. Earlier versions guessed at them and the guesses were wron
 - **ChatGPT message caps are not available.** `/backend-api/usage`, `/rate_limits` and `/conversation_limit` all return 404 and the model list carries no quota fields. Only the agent and task window is exposed, which is what the meter shows.
 - **ChatGPT context is a size, never a fill level.** Checked on 26 September 2026: the reply stream carries no usage figures, and neither the pricing page nor the GPT-5.6 help article gives a context window for ChatGPT plans. The size counts the live branch of the chat at about four characters a token and cannot see custom instructions, memory or the system prompt. The trimmed flag reads the `context_truncation_continuation` field, which was empty on every chat checked, so what it means is inferred from its name.
 - **Search covers titles everywhere, question text only where you have been.** claude.ai has no search endpoint, so the palette builds its own index. Thread titles are cheap and all of them are indexed. Question text is only indexed for threads you actually open, because fetching every thread up front measured at 5.7 minutes and 40MB. The index fills in as you use Claude normally.
+- **The prompt advisor reads words, not difficulty.** "Now do the same for sem 4" looks trivial and leans on everything the thread built, which is why it only speaks on a new chat or a long prompt. It is local pattern rules, and it will sometimes call a short judgment question simple. Hover the hint to see which signals it acted on. The card also shows how many of its hints you have followed. If you overrule it on more than one prompt in four, the rules are too crude for how you write.
 - **These are undocumented internal endpoints.** Anthropic and OpenAI can change them without notice, and when they do this breaks. There is a `MANUAL_SELECTOR` escape hatch at the top of the Claude script for the most likely breakage.
 
 ---
