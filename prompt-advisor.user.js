@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Prompt Advisor
 // @namespace    local.deepith
-// @version      1.1.0
+// @version      1.2.0
 // @description  Reads the prompt you are typing on claude.ai or chatgpt.com and says which model and effort level it needs, when that differs from what you have picked.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -58,6 +58,7 @@
   const CONFIG = {
     debounceMs: 400,
     minChars: 15,            // below this there is nothing to judge
+    showAgree: true,         // a dim "High fits this" line when your pick is right
     rereadTokens: 20000,     // past this, a mid-thread switch costs more than a summary
   };
 
@@ -400,14 +401,23 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * ChatGPT: one model, three thinking levels
+   * ChatGPT: two modes, effort only
    *
-   * Checked on 29 Sep 2026 on a Plus account: the picker offers GPT-5.6 Sol
-   * (and GPT-5.5, marked as leaving on 14 October), and a thinking-effort
-   * slider with three stops, 0 to 2, where 2 reads "High". So on ChatGPT only
-   * effort is advised. The names of the lower stops are learned the first
-   * time you open the slider on them, rather than guessed here.
+   * Checked on 29 Sep 2026 on a Plus account. ChatGPT has a Chat | Work switch
+   * above the composer, and the two use different pickers.
+   *
+   *   Chat runs GPT-5.6 Sol with a thinking-effort slider of three stops,
+   *   Instant, Medium and High. The button shows only the current stop's name.
+   *
+   *   Work runs GPT-6 Astra with a nine-step ladder: None, Minimal, Light,
+   *   Medium, High, Extra High, Max, Ultra, Persistent. The button carries the
+   *   whole ladder in order, plus the current step in a screen-reader label.
+   *
+   * There is one model per mode, so only effort is advised on ChatGPT.
    * ------------------------------------------------------------------ */
+
+  // The names ChatGPT uses, lightest first, read off the Work ladder.
+  const GPT_NAMES = ['none', 'minimal', 'light', 'medium', 'high', 'extra high', 'max', 'ultra', 'persistent'];
 
   const LEVEL_KEY = 'cpa-gpt-levels';
   function gptLevels() {
@@ -425,24 +435,67 @@
     const lv = gptLevels();
     if (lv[now] !== name) { lv[now] = name; try { localStorage.setItem(LEVEL_KEY, JSON.stringify(lv)); } catch (e) {} }
   }
+
+  /*
+   * Work mode's target step. Minimal is the floor rather than None, because
+   * Work runs tasks with tools, and a step with no reasoning at all skips the
+   * planning a tool call needs. Max, Ultra and Persistent are never suggested,
+   * for the same reason Max is not on Claude.
+   */
+  function workEffort(a) {
+    if (a.depth >= 3) return 'Extra High';
+    if (a.depth === 2) return 'High';
+    if (a.kind === 2 || (a.kind === 1 && a.depth === 1)) return 'Medium';
+    if (a.kind === 1 || a.depth === 1) return 'Light';
+    return 'Minimal';
+  }
+
   function gptCurrent() {
     const b = document.querySelector('button[aria-label="Select ChatGPT model"]');
     if (!b) return null;
-    // innerText, because the button also holds a hidden "Thinking effort"
-    // measuring label that textContent would glue onto the front.
+
+    // Work mode: the button lists its ladder.
+    const steps = [...b.querySelectorAll('[class*="EffortText"]')].map((e) => e.textContent.trim()).filter(Boolean);
+    if (steps.length) {
+      const modelEl = b.querySelector('[class*="TriggerModel"]');
+      const curEl = b.querySelector('.sr-only');
+      const cur = curEl ? curEl.textContent.trim() : '';
+      const level = steps.findIndex((x) => x.toLowerCase() === cur.toLowerCase());
+      if (level < 0) return null;
+      const model = modelEl ? modelEl.textContent.trim() : '';
+      return { work: true, level, steps, label: (model ? model + ' · ' : '') + cur };
+    }
+
+    // Chat mode: innerText, because the button also holds a hidden "Thinking
+    // effort" measuring label that textContent would glue onto the front.
     const t = (b.innerText || '').replace(/thinking effort/ig, '').replace(/\s+/g, ' ').trim();
     if (!t) return null;
     const lv = gptLevels();
     for (const k of Object.keys(lv)) if (t === lv[k] || t.startsWith(lv[k])) return { level: +k, label: t };
-    return null;
+    // A stop you have not opened the slider on yet. Place it by name: below
+    // Medium is the bottom stop, Medium the middle, and High or above the top.
+    const rank = GPT_NAMES.indexOf(t.toLowerCase());
+    if (rank < 0) return null;
+    return { level: rank < 3 ? 0 : rank === 3 ? 1 : 2, label: t };
   }
+
   function gptAdvice(a) {
     const cur = gptCurrent();
     if (!cur) return null;
-    const want = (a.kind === 0 && a.depth <= 1) ? 0 : (a.kind === 2 || a.depth >= 2) ? 2 : 1;
+    // Upward only for real reasoning or a real judgment call, as on Claude.
+    const worthRaising = a.depth >= 2 || a.kind === 2;
+
+    if (cur.work) {
+      const name = workEffort(a);
+      const want = cur.steps.findIndex((x) => x.toLowerCase() === name.toLowerCase());
+      if (want < 0 || want === cur.level) return { agree: true, cur: cur.label };
+      if (want > cur.level && !worthRaising) return { agree: true, cur: cur.label };
+      return { agree: false, dir: want < cur.level ? -1 : 1, label: cur.steps[want] + ' effort', cur: cur.label };
+    }
+
+    const want = (a.kind === 0 && a.depth <= 1) ? 0 : worthRaising ? 2 : 1;
     if (want === cur.level) return { agree: true, cur: cur.label };
-    // Upward only for real reasoning, same rule as on Claude.
-    if (want > cur.level && a.depth < 2 && a.kind < 2) return { agree: true, cur: cur.label };
+    if (want > cur.level && !worthRaising) return { agree: true, cur: cur.label };
     const lv = gptLevels();
     const label = lv[want] ? lv[want] + ' thinking' : (want === 0 ? 'Lowest thinking' : want === 1 ? 'Middle thinking' : 'High thinking');
     return { agree: false, dir: want < cur.level ? -1 : 1, label, cur: cur.label };
@@ -512,6 +565,8 @@
   .cpa-hint b { font-weight: 600; }
   .cpa-hint .cpa-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: #d97757; }
   .cpa-hint.cpa-up .cpa-dot { background: #5b9dbb; }
+  .cpa-hint.cpa-ok { opacity: 0.7; box-shadow: none; }
+  .cpa-hint.cpa-ok .cpa-dot { background: #7fa37f; }
   .cpa-hint .cpa-why { opacity: 0.6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .cpa-hint button { all: unset; cursor: pointer; opacity: 0.5; padding: 0 4px; font-size: 14px; line-height: 1; }
   .cpa-hint button:hover { opacity: 1; }
@@ -720,7 +775,23 @@
     lastThread = thread;
     lastHandoff = why;
     lastSoft = !!(move && move.soft);
-    if (!why && (!adv || adv.agree)) { hide(); return; }
+    if (!why && !adv) { hide(); return; }
+    if (!why && adv.agree) {
+      if (!CONFIG.showAgree) { hide(); return; }
+      // Your pick already fits. Say so quietly, so silence never has to mean
+      // either "agreed" or "not working".
+      hintText.textContent = '';
+      const ok = document.createElement('b');
+      ok.textContent = adv.cur;
+      hintText.append(ok, document.createTextNode(' fits this'));
+      hintWhy.textContent = a.why[0];
+      hintAct.hidden = true;
+      hint.classList.remove('cpa-up');
+      hint.classList.add('cpa-ok', 'cpa-on');
+      place();
+      return;
+    }
+    hint.classList.remove('cpa-ok');
 
     hintText.textContent = '';
     const bold = document.createElement('b');

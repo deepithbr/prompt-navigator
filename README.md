@@ -35,7 +35,7 @@ Works as a Chrome extension or as two Tampermonkey userscripts. The files are th
 **On both sites, as you type**
 
 - One line above the text box when the model or effort you picked is heavier or lighter than the prompt needs, such as **Sonnet 5.5 · Medium would do this**. Hover it for the audit behind the call
-- Silent when your pick already fits
+- A dim "High fits this" line when your pick already fits, so a quiet hint never has to mean either "agreed" or "not working"
 - In an existing thread, a follow-up such as "now do the same for sem 4" is judged by the question it follows, because its difficulty lives in the thread, not in its own words
 - As the thread grows it weighs the thread too. A new task on a long thread, any switch of model or effort on a thread past about 20K tokens, and every prompt near compaction get a suggestion to move to a new chat, with a **Summarise** button that puts a short handover request in the box and keeps your prompt at the end. A follow-up on a long thread gets a one-time "wrap up soon". Work that draws on the whole thread, such as "consolidate everything above", stays in the thread and gets a step more effort instead
 - It never switches anything for you and never sends the prompt anywhere
@@ -52,7 +52,7 @@ Stakes move a prompt in the direction its errors come from. On writing or analys
 
 Why a switch on a big thread becomes "move to a new chat": changing model or effort mid-thread makes the next reply reread the whole thread without the prompt cache, per Claude's prompt caching docs. Past a modest size, a 400-word handover in a fresh chat is cheaper than that reread.
 
-On ChatGPT there is one model to choose, so only the thinking-effort slider is advised. ChatGPT publishes no context window, so there the only new-chat signal is ChatGPT's own flag that it trimmed earlier turns.
+On ChatGPT each mode has one model, so only effort is advised. Chat mode's slider has three steps, Instant, Medium and High. Work mode runs GPT-6 Astra on a nine-step ladder from None to Persistent, and the advisor suggests between Minimal and Extra High on it, never Max, Ultra or Persistent. ChatGPT publishes no context window, so there the only new-chat signal is ChatGPT's own flag that it trimmed earlier turns.
 
 The thread size and earlier questions come from the Prompt Navigator and the ChatGPT meter. Without them the advisor still judges new chats, but stays quiet on follow-ups rather than guess.
 

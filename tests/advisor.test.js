@@ -5,9 +5,11 @@ const path = require('path');
 const src = fs.readFileSync(path.join(__dirname, '..', 'prompt-advisor.user.js'), 'utf8');
 const from = src.indexOf('  // Kind of thinking, lightest first.');
 const to = src.indexOf('  /* The button reads');
-const { audit, pick, NAMES, EFFORTS, inherit, handoffWhy, longThreadDepth } = new Function(
+// The ChatGPT section sits after the Claude grid; pull workEffort out on its own.
+const workSrc = src.slice(src.indexOf('  function workEffort'), src.indexOf('  function gptCurrent'));
+const { audit, pick, NAMES, EFFORTS, inherit, handoffWhy, longThreadDepth, workEffort } = new Function(
   'const CONFIG = { rereadTokens: 20000 };\n' + src.slice(from, to)
-  + '\nreturn { audit, pick, NAMES, EFFORTS, inherit, handoffWhy, longThreadDepth };')();
+  + workSrc + '\nreturn { audit, pick, NAMES, EFFORTS, inherit, handoffWhy, longThreadDepth, workEffort };')();
 
 const cases = [
   // [prompt, expected model, expected effort or null]
@@ -110,6 +112,21 @@ for (const [name, adv, a, th, want] of handoffs) {
   const ok = why === null;
   if (!ok) fail++;
   console.log((ok ? 'ok   ' : 'FAIL ') + 'stays in the thread'.padEnd(62) + ' ' + p);
+}
+// ChatGPT Work mode: the step each prompt should get on GPT-6 Astra's ladder.
+const work = [
+  ['Fix the typos in this paragraph: Teh students will recieve there marks on monday.', 'Minimal'],
+  ['i need a strategy for marketing a product..let me know how to do it', 'Medium'],
+  ['Write a lesson plan for a 50 minute session on photosynthesis for class 8.', 'Light'],
+  [cases[7][0], 'High'],
+  [cases[12][0], 'Extra High'],
+];
+console.log('');
+for (const [p, want] of work) {
+  const got = workEffort(audit(p, {}));
+  const ok = got === want;
+  if (!ok) fail++;
+  console.log((ok ? 'ok   ' : 'FAIL ') + ('Work · ' + got).padEnd(20) + ' ' + p.slice(0, 70));
 }
 console.log(fail ? `\n${fail} failed` : '\nall passed');
 process.exit(fail ? 1 : 0);
