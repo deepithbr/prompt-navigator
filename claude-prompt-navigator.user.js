@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Prompt Navigator
 // @namespace    local.deepith
-// @version      3.13.2
+// @version      3.14.0
 // @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it reads the session event log for the same complete list, and shows the files that session produced.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -84,6 +84,7 @@
     'claude-opus-5-5': 1000000,
     'claude-opus-5': 1000000,
     'claude-sonnet-5': 1000000,
+    'claude-sonnet-5-5': 1000000,
     'claude-fable-5': 500000,
     'claude-opus-4-8': 500000,
     'claude-opus-4-7': 500000,
@@ -475,6 +476,61 @@
     return norm((m.content || []).map((c) => c.text || '').join(' '));
   }
 
+  /*
+   * Kept or missed, for the prompt advisor's record of which picks you had to
+   * redo. An answer missed when you regenerated it, stopped it, edited the
+   * question that produced it, or opened your next message by correcting it.
+   * Otherwise it was kept, once you moved on or half an hour passed.
+   *
+   * claude.ai stores no model on a message, only on the conversation, so the
+   * pick comes from the advisor, which notes it at the moment you send. The
+   * two are joined on the opening of the question's text.
+   */
+  const CORRECTION = /^\s*(no\b|nope\b|wrong\b|that'?s (not|wrong|incorrect)|not (what|right|correct|quite)|incorrect\b|you (missed|forgot|didn'?t|ignored)|try again|redo\b|still (wrong|not)|this is (wrong|not))/i;
+
+  function outcomeKey(t) {
+    return String(t || '').toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 80);
+  }
+
+  function saveOutcomes(found) {
+    if (!found.length) return;
+    let all = {};
+    try { all = JSON.parse(localStorage.getItem('cpa-outcomes')) || {}; } catch (e) {}
+    for (const [k, o] of found) all[k] = [o, Date.now()];
+    const keys = Object.keys(all);
+    if (keys.length > 3000) {
+      keys.sort((a, b) => all[a][1] - all[b][1]).slice(0, keys.length - 3000).forEach((k) => delete all[k]);
+    }
+    try { localStorage.setItem('cpa-outcomes', JSON.stringify(all)); } catch (e) {}
+  }
+
+  function recordOutcomes(everything) {
+    const kids = new Map();
+    for (const m of everything) {
+      const p = m.parent_message_uuid;
+      if (!kids.has(p)) kids.set(p, []);
+      kids.get(p).push(m);
+    }
+    const found = [];
+    for (const m of everything) {
+      if (m.sender !== 'human') continue;
+      const text = textOfMessage(m);
+      const replies = (kids.get(m.uuid) || []).filter((x) => x.sender === 'assistant');
+      if (!text || !replies.length) continue;
+      const asked = Date.parse(m.created_at) || 0;
+      const edited = (kids.get(m.parent_message_uuid) || [])
+        .some((x) => x !== m && x.sender === 'human' && (Date.parse(x.created_at) || 0) > asked);
+      const redone = replies.length > 1 || replies.some((r) => r.stop_reason === 'user_canceled');
+      const next = [];
+      replies.forEach((r) => (kids.get(r.uuid) || []).forEach((x) => { if (x.sender === 'human') next.push(x); }));
+      const corrected = next.some((x) => CORRECTION.test(textOfMessage(x)));
+      const answered = Date.parse(replies[replies.length - 1].created_at) || 0;
+      if (edited || redone || corrected) found.push([outcomeKey(text), 'missed']);
+      else if (next.length || Date.now() - answered > 30 * 60000) found.push([outcomeKey(text), 'kept']);
+    }
+    saveOutcomes(found);
+  }
+
   async function fetchQuestions(convId) {
     const orgs = await getOrgIds();
     for (const org of orgs) {
@@ -514,6 +570,7 @@
       // If the leaf could not be resolved, fall back to the whole tree rather
       // than showing an empty rail.
       if (!msgs.length) msgs = everything.slice();
+      recordOutcomes(everything);
       msgs.sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
       /*
        * Size the conversation from content blocks, counting text and the

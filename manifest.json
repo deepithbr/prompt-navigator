@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Prompt Navigator for Claude",
-  "version": "3.17.1",
+  "version": "3.18.0",
   "description": "Jump between your own questions in a Claude chat, search them across every thread, see the documents a thread produced, read your plan usage, and see which model and effort a prompt needs. Adds a usage meter to ChatGPT too.",
   "homepage_url": "https://github.com/deepithbr/prompt-navigator",
 

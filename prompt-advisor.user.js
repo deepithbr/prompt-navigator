@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Prompt Advisor
 // @namespace    local.deepith
-// @version      1.3.0
+// @version      1.4.0
 // @description  Reads the prompt you are typing on claude.ai or chatgpt.com and says which model and effort level it needs, when that differs from what you have picked.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -342,20 +342,28 @@
   const EFFORTS = ['Low', 'Medium', 'High', 'Extra', 'Max'];
 
   /*
-   * Kind picks the model, depth picks the effort. Max never appears: the
-   * picker itself warns it costs 5.5 times or more, and nothing a rule can
-   * see in a prompt justifies that. Fable 5.1 never appears either: it is
-   * built for long autonomous work, which a single prompt does not reveal.
+   * Kind picks the model, depth picks the effort. Checked against Anthropic's
+   * own guidance on 30 Sep 2026 [Claude docs: Effort, Choosing a model,
+   * Prompting Claude Opus 5.5; Claude Help Center: effort settings]:
+   *
+   *   Low "Skips thinking for simple tasks where speed matters most".
+   *   Medium is "the default on Claude Opus 5.5", and Sonnet 5.5's in the apps.
+   *   High is for "Complex reasoning, difficult coding problems".
+   *   Extra is "designed for long-running coding and agentic tasks", which a
+   *   chat prompt is not, so it is never suggested here. Nor is Max: Anthropic
+   *   says to reserve both "for work where you've measured a quality gain".
+   *   Fable 5.1 is for "Problems you've tested with Opus and it struggled",
+   *   which one prompt cannot show, and on Pro it draws on usage credits.
    *
    *              depth 0          1                2               3
    *   transform  Haiku 4.5        Sonnet · Low     Sonnet · Medium Sonnet · High
    *   create     Sonnet · Low     Sonnet · Medium  Sonnet · High   Opus · High
-   *   judgment   Opus · Medium    Opus · Medium    Opus · High     Opus · Extra
+   *   judgment   Opus · Medium    Opus · Medium    Opus · High     Opus · High
    */
   const GRID = [
     [['haiku', null], ['sonnet', 0], ['sonnet', 1], ['sonnet', 2]],
     [['sonnet', 0], ['sonnet', 1], ['sonnet', 2], ['opus', 2]],
-    [['opus', 1], ['opus', 1], ['opus', 2], ['opus', 3]],
+    [['opus', 1], ['opus', 1], ['opus', 2], ['opus', 2]],
   ];
   const NAMES = { haiku: 'Haiku 4.5', sonnet: 'Sonnet 5.5', opus: 'Opus 5.5' };
 
@@ -403,7 +411,16 @@
     else if (want.effort != null && we > ce && a.depth >= 2) dir = 1;
     if (!dir) return { agree: true, cur: cur.label };
     const label = NAMES[want.model] + (want.effort == null ? '' : ' · ' + EFFORTS[want.effort]);
-    return { agree: false, dir, label, cur: cur.label };
+    // "Tuning effort is often a better lever than switching models" [Claude
+    // docs, Choosing a model]. So a step down in model also names the same
+    // step down in effort on the model you already have. Haiku has no effort.
+    let alt = null;
+    if (cm > wm && cur.family !== 'haiku') {
+      const name = cur.family[0].toUpperCase() + cur.family.slice(1) + (cur.version ? ' ' + cur.version : '');
+      const e = want.effort == null ? 0 : want.effort;
+      if (cur.effort == null || e < cur.effort) alt = name + ' · ' + EFFORTS[e];
+    }
+    return { agree: false, dir, label, alt, cur: cur.label };
   }
 
   /* ------------------------------------------------------------------ *
@@ -446,17 +463,34 @@
   }
 
   /*
-   * Work mode's target step. Minimal is the floor rather than None, because
-   * Work runs tasks with tools, and a step with no reasoning at all skips the
-   * planning a tool call needs. Max, Ultra and Persistent are never suggested,
-   * for the same reason Max is not on Claude.
+   * Work mode advises model as well as effort. Checked against OpenAI's own
+   * guidance on 30 Sep 2026 [OpenAI: Codex models, Introducing GPT-6 Sol and
+   * Luna, Introducing GPT-6.1 Sol]:
+   *
+   *   Luna is "Our most efficient model for focused, high-volume tasks,
+   *   including summarization, extraction". OpenAI says to start it at High.
+   *   Sol "can take on difficult work tasks" with higher usage limits, and
+   *   GPT-6.1 Sol, out 29 Sep, "nearly matches GPT-6 Astra". Work and Codex
+   *   only, not Chat.
+   *   Astra is for "when a task needs the strongest capability across steps
+   *   and tools". OpenAI says to start it at Light.
+   *   Light "suits quick, well-scoped tasks", Medium is for "tasks that need
+   *   more planning", High and Extra High for "difficult work with multiple
+   *   steps, sources, or tradeoffs", and "Most tasks do not need Max or Ultra".
+   *
+   * The button on this account also lists None, Minimal and Persistent, which
+   * no OpenAI page describes, so none of those is ever suggested.
    */
-  function workEffort(a) {
-    if (a.depth >= 3) return 'Extra High';
-    if (a.depth === 2) return 'High';
-    if (a.kind === 2 || (a.kind === 1 && a.depth === 1)) return 'Medium';
-    if (a.kind === 1 || a.depth === 1) return 'Light';
-    return 'Minimal';
+  const GPT_MODELS = ['GPT-6 Luna', 'GPT-6.1 Sol', 'GPT-6 Astra'];
+  function gptRank(model) {
+    return /luna/i.test(model) ? 0 : /astra|\bpro\b/i.test(model) ? 2 : 1;
+  }
+  function workPick(a) {
+    if (a.kind === 0 && a.depth <= 1) return { model: 0, step: 'High' };
+    if (a.depth >= 3) return { model: 2, step: 'Light' };
+    if (a.depth === 2) return { model: 1, step: 'High' };
+    if (a.kind === 2 || a.depth === 1) return { model: 1, step: 'Medium' };
+    return { model: 1, step: 'Light' };
   }
 
   function gptCurrent() {
@@ -472,7 +506,7 @@
       const level = steps.findIndex((x) => x.toLowerCase() === cur.toLowerCase());
       if (level < 0) return null;
       const model = modelEl ? modelEl.textContent.trim() : '';
-      return { work: true, level, steps, label: (model ? model + ' · ' : '') + cur };
+      return { work: true, model, level, steps, label: (model ? model + ' · ' : '') + cur };
     }
 
     // Chat mode: innerText, because the button also holds a hidden "Thinking
@@ -491,17 +525,18 @@
   /*
    * The desktop app's button is one accessible name, such as "GPT-5.6 Sol
    * Medium" or "GPT-6 Astra Light", so the effort is the trailing step name.
-   * Astra is Work mode's model and gets Work's nine-step ladder.
+   * work says the app is in Work or Codex mode, which uses Work's ladder
+   * whatever the model. The GPT-6 family only runs there.
    */
   const WORK_STEPS = ['None', 'Minimal', 'Light', 'Medium', 'High', 'Extra High', 'Max', 'Ultra', 'Persistent'];
-  function parseGptButton(raw) {
+  function parseGptButton(raw, work) {
     const t = raw.replace(/\s+/g, ' ').trim();
     const m = t.match(/^(.*?)\s+(none|minimal|instant|light|low|medium|high|extra high|max|ultra|persistent)$/i);
     if (!m) return null;
     const model = m[1], step = m[2];
-    if (/astra/i.test(model)) {
+    if (work || /gpt-6/i.test(model)) {
       const level = WORK_STEPS.findIndex((x) => x.toLowerCase() === step.toLowerCase());
-      return level < 0 ? null : { work: true, level, steps: WORK_STEPS, label: model + ' · ' + WORK_STEPS[level] };
+      return level < 0 ? null : { work: true, model, level, steps: WORK_STEPS, label: model + ' · ' + WORK_STEPS[level] };
     }
     const lv = gptLevels();
     for (const k of Object.keys(lv)) if (lv[k].toLowerCase() === step.toLowerCase()) return { level: +k, label: model + ' · ' + lv[k] };
@@ -515,11 +550,17 @@
     const worthRaising = a.depth >= 2 || a.kind === 2;
 
     if (cur.work) {
-      const name = workEffort(a);
-      const want = cur.steps.findIndex((x) => x.toLowerCase() === name.toLowerCase());
-      if (want < 0 || want === cur.level) return { agree: true, cur: cur.label };
-      if (want > cur.level && !worthRaising) return { agree: true, cur: cur.label };
-      return { agree: false, dir: want < cur.level ? -1 : 1, label: cur.steps[want] + ' effort', cur: cur.label };
+      const want = workPick(a);
+      const cm = gptRank(cur.model || ''), wm = want.model;
+      const ws = cur.steps.findIndex((x) => x.toLowerCase() === want.step.toLowerCase());
+      let dir = 0;
+      if (cm > wm) dir = -1;
+      else if (cm < wm) dir = 1;
+      else if (ws >= 0 && cur.level > ws) dir = -1;
+      else if (ws >= 0 && ws > cur.level && worthRaising) dir = 1;
+      if (!dir) return { agree: true, cur: cur.label };
+      const model = cm === wm && cur.model ? cur.model : GPT_MODELS[wm];
+      return { agree: false, dir, label: model + ' · ' + want.step, cur: cur.label };
     }
 
     const want = (a.kind === 0 && a.depth <= 1) ? 0 : worthRaising ? 2 : 1;
@@ -634,6 +675,7 @@
   let lastAudit = null, lastAdvice = null, lastThread = null, lastHandoff = null;
   let noteFor = null;         // the start of the summary request we put in the box
   let lastSoft = false;       // the current hint is the wrap-up warning
+  let lastText = '';          // the draft the last reading was of
   const wrapSeen = new Set(); // thread|band pairs whose wrap-up warning you have seen
   let summarised = false;     // you took the new-chat route for this draft
   let dismissedFor = null;    // the draft text you closed the hint on
@@ -741,6 +783,15 @@
         : '~' + fmtK(t.tokens) + ' tokens' + (t.window ? ' of a ' + fmtK(t.window) + ' window, ' + t.band : '')
           + (t.trimmed ? ', earlier turns trimmed' : '')]);
     }
+    if (lastAdvice.alt) {
+      rows.push(['Or', lastAdvice.alt + ' on the model you have. Anthropic says tuning effort '
+        + 'is often a better lever than switching models.']);
+    }
+    const KINDS = ['transform', 'create or analyse', 'judgment'];
+    const record = recordFor(a.kind);
+    rows.push(['Your record', record
+      ? `On ${KINDS[a.kind]} prompts: ${record}.`
+      : `Nothing judged yet on ${KINDS[a.kind]} prompts. It fills in as you use Claude and ChatGPT.`]);
     if (lastHandoff) {
       rows.push(['New chat', lastHandoff + '. Summarise puts a handover request in the box, '
         + 'with your prompt kept at the end.']);
@@ -773,6 +824,8 @@
 
   function evaluate() {
     if (!hint) return;
+    lastAudit = null;
+    lastText = '';
     const b = box();
     if (!b || blocked()) { hide(); return; }
     const text = (b.innerText || '').trim();
@@ -783,7 +836,7 @@
     const c = card(b);
     const att = attachments(c);
     if (text.length < CONFIG.minChars && !att) { hide(); return; }
-    if (dismissedFor !== null && text.startsWith(dismissedFor.slice(0, 40))) { hide(); return; }
+    const suppressed = dismissedFor !== null && text.startsWith(dismissedFor.slice(0, 40));
 
     const thread = existingThread() ? threadFor() : null;
     let a = audit(text, { attachments: att });
@@ -804,6 +857,8 @@
     lastThread = thread;
     lastHandoff = why;
     lastSoft = !!(move && move.soft);
+    lastText = text;
+    if (suppressed) { hide(); return; }
     if (!why && !adv) { hide(); return; }
     if (!why && adv.agree) {
       if (!CONFIG.showAgree) { hide(); return; }
@@ -852,6 +907,45 @@
     timer = setTimeout(evaluate, CONFIG.debounceMs);
   }
 
+  /*
+   * Your record. Every send notes the prompt's reading and your pick in
+   * cpa-log. The Prompt Navigator and the ChatGPT meter mark each question
+   * kept or missed in cpa-outcomes as they read threads: missed means you
+   * regenerated, stopped, edited or corrected the answer. Joining the two
+   * shows how often each pick had to be redone on prompts of the same kind,
+   * which is the evidence the grid above should be tuned against. Both stay
+   * in this browser.
+   */
+  function outcomeKey(t) {
+    return String(t || '').toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 80);
+  }
+  function readJson(key, fallback) {
+    try { return JSON.parse(localStorage.getItem(key)) || fallback; } catch (e) { return fallback; }
+  }
+  function logSend() {
+    if (!lastAudit || !lastAdvice || !lastText) return;
+    const log = readJson('cpa-log', []);
+    log.push({
+      t: Date.now(), site: SITE, k: outcomeKey(lastText),
+      kind: lastAudit.kind, depth: lastAudit.depth,
+      pick: lastAdvice.cur, suggested: lastAdvice.agree ? null : lastAdvice.label,
+    });
+    try { localStorage.setItem('cpa-log', JSON.stringify(log.slice(-1500))); } catch (e) {}
+  }
+  function recordFor(kind) {
+    const outcomes = readJson('cpa-outcomes', {});
+    const by = {};
+    for (const e of readJson('cpa-log', [])) {
+      const o = outcomes[e.k];
+      if (e.site !== SITE || e.kind !== kind || !o) continue;
+      const r = by[e.pick] || (by[e.pick] = { n: 0, missed: 0 });
+      r.n += 1;
+      if (o[0] === 'missed') r.missed += 1;
+    }
+    const picks = Object.keys(by).sort((x, y) => by[y].n - by[x].n).slice(0, 3);
+    return picks.length ? picks.map((p) => `${p} redone ${by[p].missed} of ${by[p].n}`).join('. ') : null;
+  }
+
   // Counted at send time. Followed means a hint showed for this draft and your
   // pick agreed with it by the time you sent, which is the only way the hint
   // goes quiet without the close button.
@@ -881,13 +975,14 @@
       const b = box();
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && b && b.contains(e.target)) {
         evaluate();
+        logSend();
         onSend();
       }
     }, true);
     document.addEventListener('click', (e) => {
       const s = e.target.closest && e.target.closest(
         'button[aria-label="Send message"],button[data-testid="send-button"],#composer-submit-button');
-      if (s) { evaluate(); onSend(); }
+      if (s) { evaluate(); logSend(); onSend(); }
     }, true);
 
     // The picker changes without touching the text box, so it is polled. This

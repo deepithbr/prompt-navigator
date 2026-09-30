@@ -123,11 +123,11 @@ class Rules
         node = Process.Start(psi);
     }
 
-    public Dictionary<string, object> Ask(string app, string text, string button)
+    public Dictionary<string, object> Ask(string app, string text, string button, string mode)
     {
         if (node == null || node.HasExited) Start();
         Dictionary<string, object> req = new Dictionary<string, object>();
-        req["app"] = app; req["text"] = text; req["button"] = button;
+        req["app"] = app; req["text"] = text; req["button"] = button; req["mode"] = mode;
         byte[] bytes = Encoding.UTF8.GetBytes(json.Serialize(req) + "\n");
         node.StandardInput.BaseStream.Write(bytes, 0, bytes.Length);
         node.StandardInput.BaseStream.Flush();
@@ -242,7 +242,7 @@ class AdvisorContext : ApplicationContext
 
     // What the worker last saw, so the rules are asked only when it changes.
     IntPtr lastWindow = IntPtr.Zero;
-    AutomationElement box, button;
+    AutomationElement box, button, modeButton;
     string lastAsk = "", dismissedFor = null;
     DateTime buttonCheckedAt = DateTime.MinValue;
 
@@ -328,6 +328,17 @@ class AdvisorContext : ApplicationContext
         return null;
     }
 
+    static AutomationElement FindModeButton(AutomationElement win)
+    {
+        Condition isButton = new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button);
+        foreach (AutomationElement b in win.FindAll(TreeScope.Descendants, isButton))
+        {
+            string n = b.Current.Name ?? "";
+            if (n.StartsWith("Switch mode", StringComparison.OrdinalIgnoreCase)) return b;
+        }
+        return null;
+    }
+
     void Loop()
     {
         while (running)
@@ -350,7 +361,7 @@ class AdvisorContext : ApplicationContext
         if (app == null) { if (hint.Visible) HideHint(); lastWindow = IntPtr.Zero; return; }
 
         AutomationElement win = AutomationElement.FromHandle(fg);
-        if (fg != lastWindow) { lastWindow = fg; box = null; button = null; lastAsk = ""; }
+        if (fg != lastWindow) { lastWindow = fg; box = null; button = null; modeButton = null; lastAsk = ""; }
 
         // The text box is whichever editable field you last focused in this
         // window. Remember it, so opening the model menu does not lose it.
@@ -362,11 +373,17 @@ class AdvisorContext : ApplicationContext
         if (button == null || (DateTime.Now - buttonCheckedAt).TotalSeconds > 3)
         {
             if (button == null) button = FindButton(win, app);
+            if (app == "chatgpt" && modeButton == null) modeButton = FindModeButton(win);
             buttonCheckedAt = DateTime.Now;
         }
 
         string text = (TextOf(box) ?? "").Trim();
         string label = button != null ? (button.Current.Name ?? "") : "";
+        // ChatGPT's desktop app says its mode on a button: "Switch mode,
+        // current mode: Codex". Codex and Work share one effort ladder.
+        string modeName = modeButton != null ? (modeButton.Current.Name ?? "") : "";
+        string mode = modeName.IndexOf("current mode: Chat", StringComparison.OrdinalIgnoreCase) >= 0 ? "chat"
+            : modeName.Length > 0 ? "work" : "chat";
         System.Windows.Rect r = box.Current.BoundingRectangle;
         lastText = text;
 
@@ -376,12 +393,12 @@ class AdvisorContext : ApplicationContext
             dismissedFor = null;
         }
 
-        string ask = app + "|" + label + "|" + text;
+        string ask = app + "|" + mode + "|" + label + "|" + text;
         Dictionary<string, object> res = null;
         if (ask != lastAsk)
         {
             lastAsk = ask;
-            res = rules.Ask(app, text, label);
+            res = rules.Ask(app, text, label, mode);
             if (res == null || !(res.ContainsKey("show") && (bool)res["show"])) { HideHint(); return; }
         }
 

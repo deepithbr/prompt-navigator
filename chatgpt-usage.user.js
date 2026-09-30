@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Usage Meter
 // @namespace    local.deepith
-// @version      1.3.2
+// @version      1.4.0
 // @description  Shows your ChatGPT plan usage as a bar with a window-elapsed marker, the same reading as the Claude Prompt Navigator header. Companion script — ChatGPT is a different origin, so this cannot live inside the claude.ai one.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -184,6 +184,54 @@
     return m ? m[1] : null;
   }
 
+  /*
+   * Kept or missed, for the prompt advisor's record. Same rule as the Claude
+   * side: an answer missed when it was regenerated, its question was edited,
+   * or your next message opened by correcting it. See prompt-advisor.user.js.
+   */
+  const CORRECTION = /^\s*(no\b|nope\b|wrong\b|that'?s (not|wrong|incorrect)|not (what|right|correct|quite)|incorrect\b|you (missed|forgot|didn'?t|ignored)|try again|redo\b|still (wrong|not)|this is (wrong|not))/i;
+
+  function outcomeKey(t) {
+    return String(t || '').toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 80);
+  }
+
+  function saidIn(m) {
+    return (m && m.content && Array.isArray(m.content.parts) ? m.content.parts : [])
+      .filter((p) => typeof p === 'string').join(' ').trim();
+  }
+
+  function recordOutcomes(map) {
+    const found = [];
+    const role = (id) => map[id] && map[id].message && map[id].message.author && map[id].message.author.role;
+    for (const id in map) {
+      if (role(id) !== 'user') continue;
+      const node = map[id];
+      const text = saidIn(node.message);
+      const replies = (node.children || []).filter((c) => role(c) === 'assistant');
+      if (!text || !replies.length) continue;
+      const asked = node.message.create_time || 0;
+      const edited = ((map[node.parent] && map[node.parent].children) || [])
+        .some((c) => c !== id && role(c) === 'user' && (map[c].message.create_time || 0) > asked);
+      const next = [];
+      replies.forEach((r) => (map[r].children || []).forEach((c) => { if (role(c) === 'user') next.push(map[c].message); }));
+      const corrected = next.some((m) => CORRECTION.test(saidIn(m)));
+      const answered = (map[replies[replies.length - 1]].message.create_time || 0) * 1000;
+      let o = null;
+      if (edited || replies.length > 1 || corrected) o = 'missed';
+      else if (next.length || Date.now() - answered > 30 * 60000) o = 'kept';
+      if (o) found.push([outcomeKey(text), o]);
+    }
+    if (!found.length) return;
+    let all = {};
+    try { all = JSON.parse(localStorage.getItem('cpa-outcomes')) || {}; } catch (e) {}
+    for (const [k, o] of found) all[k] = [o, Date.now()];
+    const keys = Object.keys(all);
+    if (keys.length > 3000) {
+      keys.sort((a, b) => all[a][1] - all[b][1]).slice(0, keys.length - 3000).forEach((k) => delete all[k]);
+    }
+    try { localStorage.setItem('cpa-outcomes', JSON.stringify(all)); } catch (e) {}
+  }
+
   async function fetchChatSize(id) {
     const t = await getToken();
     if (!t) return null;
@@ -193,6 +241,7 @@
     if (!r.ok) return null;
     const d = await r.json();
     const map = d.mapping || {};
+    recordOutcomes(map);
     let chars = 0, turns = 0;
     const asked = [];
     const seen = new Set();

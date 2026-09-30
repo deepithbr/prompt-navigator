@@ -7,7 +7,8 @@
 // desktop ones too.
 //
 // Protocol: one JSON object per line on stdin, one per line on stdout.
-//   in   { "app": "claude" | "chatgpt", "text": "...", "button": "Model: Opus 5.5 High" }
+//   in   { "app": "claude" | "chatgpt", "text": "...", "button": "Model: Opus 5.5 High",
+//          "mode": "chat" | "work" }   (ChatGPT only: Codex and Work use one ladder)
 //   out  { "show": true, "tone": "down" | "up" | "ok", "label": "...", "verb": "...",
 //          "why": "...", "cur": "...", "detail": "..." }
 //
@@ -42,7 +43,7 @@ function answer(req) {
   const text = String(req.text || '').trim();
   if (text.length < 15) return { show: false };
   const a = R.audit(text, {});
-  const cur = req.app === 'chatgpt' ? R.parseGptButton(String(req.button || ''))
+  const cur = req.app === 'chatgpt' ? R.parseGptButton(String(req.button || ''), req.mode === 'work')
     : R.parseClaudeLabel(String(req.button || ''));
   if (!cur) return { show: false, reason: 'could not read the model button' };
   const adv = req.app === 'chatgpt' ? R.gptAdvice(a, cur) : R.claudeAdvice(a, cur);
@@ -51,6 +52,7 @@ function answer(req) {
     'Kind: ' + KIND[a.kind] + '. ' + a.why.join('. '),
     'Reasoning: ' + DEPTH[a.depth] + '. ' + a.depthWhy.join(', '),
     'Size: ~' + a.tokens + ' tokens typed',
+    adv.alt ? 'Or ' + adv.alt + ' on the model you have. Anthropic says tuning effort is often a better lever than switching models.' : '',
     req.app === 'claude' && cur.effort == null
       ? 'Your effort is not shown on this button, so only the model is compared.' : '',
   ].filter(Boolean).join('\n');
@@ -76,10 +78,11 @@ if (process.argv.includes('--selftest')) {
     { app: 'chatgpt', button: 'GPT-5.6 Sol Medium', text: 'Fix the typos in this paragraph: Teh students will recieve there marks on monday.' },
     { app: 'chatgpt', button: 'GPT-5.6 Sol Medium', text: 'i need a strategy for marketing a product..let me know how to do it' },
     { app: 'chatgpt', button: 'GPT-6 Astra Light', text: 'i need a strategy for marketing a product..let me know how to do it' },
+    { app: 'chatgpt', mode: 'work', button: 'GPT-5.6 Sol Medium', text: 'Summarise this circular in three bullet points for the staff group.' },
   ];
   for (const c of cases) {
     const r = answer(c);
-    console.log(`${c.app.padEnd(8)} ${c.button.padEnd(22)} -> ${r.show ? r.label + r.verb : '(silent)'}`);
+    console.log(`${c.app.padEnd(8)} ${(c.mode || '').padEnd(5)} ${c.button.padEnd(22)} -> ${r.show ? r.label + r.verb : '(silent)'}`);
   }
   process.exit(0);
 }

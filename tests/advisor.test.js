@@ -6,10 +6,10 @@ const src = fs.readFileSync(path.join(__dirname, '..', 'prompt-advisor.user.js')
 const from = src.indexOf('  // Kind of thinking, lightest first.');
 const to = src.indexOf('  /* The button reads');
 // The ChatGPT section sits after the Claude grid; pull workEffort out on its own.
-const workSrc = src.slice(src.indexOf('  function workEffort'), src.indexOf('  function gptCurrent'));
-const { audit, pick, NAMES, EFFORTS, inherit, handoffWhy, longThreadDepth, workEffort } = new Function(
+const workSrc = src.slice(src.indexOf('  const GPT_MODELS'), src.indexOf('  function gptCurrent'));
+const { audit, pick, NAMES, EFFORTS, inherit, handoffWhy, longThreadDepth, workPick, GPT_MODELS } = new Function(
   'const CONFIG = { rereadTokens: 20000 };\n' + src.slice(from, to)
-  + workSrc + '\nreturn { audit, pick, NAMES, EFFORTS, inherit, handoffWhy, longThreadDepth, workEffort };')();
+  + workSrc + '\nreturn { audit, pick, NAMES, EFFORTS, inherit, handoffWhy, longThreadDepth, workPick, GPT_MODELS };')();
 
 const cases = [
   // [prompt, expected model, expected effort or null]
@@ -113,20 +113,21 @@ for (const [name, adv, a, th, want] of handoffs) {
   if (!ok) fail++;
   console.log((ok ? 'ok   ' : 'FAIL ') + 'stays in the thread'.padEnd(62) + ' ' + p);
 }
-// ChatGPT Work mode: the step each prompt should get on GPT-6 Astra's ladder.
+// ChatGPT Work mode: model and step, per OpenAI's Codex models guidance.
 const work = [
-  ['Fix the typos in this paragraph: Teh students will recieve there marks on monday.', 'Minimal'],
-  ['i need a strategy for marketing a product..let me know how to do it', 'Medium'],
-  ['Write a lesson plan for a 50 minute session on photosynthesis for class 8.', 'Light'],
-  [cases[7][0], 'High'],
-  [cases[12][0], 'Extra High'],
+  ['Fix the typos in this paragraph: Teh students will recieve there marks on monday.', 'GPT-6 Luna · High'],
+  ['i need a strategy for marketing a product..let me know how to do it', 'GPT-6.1 Sol · Medium'],
+  ['Write a lesson plan for a 50 minute session on photosynthesis for class 8.', 'GPT-6.1 Sol · Light'],
+  [cases[7][0], 'GPT-6.1 Sol · High'],
+  [cases[12][0], 'GPT-6 Astra · Light'],
 ];
 console.log('');
 for (const [p, want] of work) {
-  const got = workEffort(audit(p, {}));
+  const w = workPick(audit(p, {}));
+  const got = GPT_MODELS[w.model] + ' · ' + w.step;
   const ok = got === want;
   if (!ok) fail++;
-  console.log((ok ? 'ok   ' : 'FAIL ') + ('Work · ' + got).padEnd(20) + ' ' + p.slice(0, 70));
+  console.log((ok ? 'ok   ' : 'FAIL ') + got.padEnd(22) + ' ' + p.slice(0, 68));
 }
 console.log(fail ? `\n${fail} failed` : '\nall passed');
 process.exit(fail ? 1 : 0);

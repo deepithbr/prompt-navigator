@@ -46,13 +46,15 @@ It scores each prompt on two separate axes, because model and effort buy differe
 |---|---|---|---|---|
 | **Transform** (rewrite, summarise, translate, extract) | Haiku 4.5 | Sonnet 5.5 · Low | Sonnet 5.5 · Medium | Sonnet 5.5 · High |
 | **Create or analyse** (write, explain, code, plan) | Sonnet 5.5 · Low | Sonnet 5.5 · Medium | Sonnet 5.5 · High | Opus 5.5 · High |
-| **Judgment** (should we, trade-offs, critique, strategy) | Opus 5.5 · Medium | Opus 5.5 · Medium | Opus 5.5 · High | Opus 5.5 · Extra |
+| **Judgment** (should we, trade-offs, critique, strategy) | Opus 5.5 · Medium | Opus 5.5 · Medium | Opus 5.5 · High | Opus 5.5 · High |
 
-Stakes move a prompt in the direction its errors come from. On writing or analysis about fees, contracts, hiring or accreditation the model goes up, because a wrong call there is a judgment error. On a calculation about the same things the effort goes up instead, because a wrong sum is a slipped step, and a bigger model doesn't prevent that. Max effort and Fable 5.1 are never suggested. The picker itself warns that Max costs 5.5 times or more, and nothing in a single prompt shows the long autonomous work Fable is built for.
+The grid follows Anthropic's own guidance, checked on 30 September 2026. Medium is the default on Opus 5.5, and on Sonnet 5.5 in the apps. High is for complex reasoning. Extra is described as "designed for long-running coding and agentic tasks", which a chat prompt is not, so it is not suggested, and neither is Max. When the hint suggests a smaller model, the hover card also names the same step down in effort on the model you already have, because Anthropic says "tuning effort is often a better lever than switching models".
+
+Stakes move a prompt in the direction its errors come from. On writing or analysis about fees, contracts, hiring or accreditation the model goes up, because a wrong call there is a judgment error. On a calculation about the same things the effort goes up instead, because a wrong sum is a slipped step, and a bigger model doesn't prevent that. Max effort and Fable 5.1 are never suggested. The picker itself warns that Max costs 5.5 times or more. Anthropic points to Fable 5.1 for problems Opus has already struggled with, which a single prompt cannot show, and on Pro it draws on usage credits.
 
 Why a switch on a big thread becomes "move to a new chat": changing model or effort mid-thread makes the next reply reread the whole thread without the prompt cache, per Claude's prompt caching docs. Past a modest size, a 400-word handover in a fresh chat is cheaper than that reread.
 
-On ChatGPT each mode has one model, so only effort is advised. Chat mode's slider has three steps, Instant, Medium and High. Work mode runs GPT-6 Astra on a nine-step ladder from None to Persistent, and the advisor suggests between Minimal and Extra High on it, never Max, Ultra or Persistent. ChatGPT publishes no context window, so there the only new-chat signal is ChatGPT's own flag that it trimmed earlier turns.
+On ChatGPT, Chat mode has one model for Plus, GPT-5.6 Sol, so only its three effort steps are advised: Instant, Medium and High. Work mode, and Codex in the desktop app, get model advice too, following OpenAI's own guidance: GPT-6 Luna at High for summaries and extraction, GPT-6.1 Sol from Light to High for most work, and GPT-6 Astra at Light for the hardest multi-step tasks. GPT-6.1 Sol came out on 29 September 2026 for Work and Codex only. Max, Ultra and the undocumented None, Minimal and Persistent steps are never suggested. ChatGPT publishes no context window, so there the only new-chat signal is ChatGPT's own flag that it trimmed earlier turns.
 
 The thread size and earlier questions come from the Prompt Navigator and the ChatGPT meter. Without them the advisor still judges new chats, but stays quiet on follow-ups rather than guess.
 
@@ -103,6 +105,7 @@ Two things are stored locally, both on your own machine and neither ever transmi
 
 - a `localStorage` flag remembering whether you pinned the rail open
 - two small `localStorage` entries for the prompt advisor. `cpa-stats` counts how many of its hints you followed, and `cpa-gpt-levels` remembers the names of ChatGPT's thinking-effort stops as you open the slider on them
+- your record, for the prompt advisor. `cpa-log` notes each prompt you send: the first 80 characters, its reading and the model and effort you had picked. `cpa-outcomes` marks each question kept or missed, keyed by the same 80 characters, as the rail or the ChatGPT meter reads a thread. Missed means you regenerated or stopped the reply, edited the question, or opened your next message by correcting it. The hover card joins the two to show how often each pick was redone on prompts of the same kind
 - an IndexedDB database, `cpn-index`, holding your thread titles and the text of questions in threads you have opened, so the search palette can answer without a network round trip. Clearing site data for `claude.ai` removes it
 
 On `claude.ai` it calls the same endpoints the page itself calls, using your existing session:
