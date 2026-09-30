@@ -56,6 +56,12 @@ On ChatGPT each mode has one model, so only effort is advised. Chat mode's slide
 
 The thread size and earlier questions come from the Prompt Navigator and the ChatGPT meter. Without them the advisor still judges new chats, but stays quiet on follow-ups rather than guess.
 
+**In the Claude and ChatGPT desktop apps**
+
+The same hint, from a small companion in the tray. Both desktop apps are Chromium inside signed Store packages, so nothing can be added to them. The companion reads them from outside through Windows UI Automation, the interface screen readers use: the text box you are typing in and the model button beside it. It runs the same rules as the extension, loaded from `prompt-advisor.user.js` itself, and draws the answer as one line above the text box. It never types or clicks in the apps and never touches the network.
+
+It gives prompt-level advice only. Follow-ups, thread length and the new-chat suggestion need the conversation, which the desktop apps do not expose, so those stay in the browser.
+
 ---
 
 ## Install as a Chrome extension
@@ -74,6 +80,18 @@ No permissions are requested. The extension declares no `permissions` and no `ho
 2. Open `chrome://extensions`, enable Developer mode, open Tampermonkey's **Details**, and turn on **Allow user scripts** — Chrome 138 and later refuse to inject without this, and Tampermonkey fails silently rather than warning you
 3. Create a new script, paste in `claude-prompt-navigator.user.js`, save
 4. Repeat for `chatgpt-usage.user.js` and `prompt-advisor.user.js`
+
+## Run the desktop companion
+
+Needs Windows and Node.js.
+
+1. Double-click `desktop\Start.cmd`. A tray icon appears, and there is no window
+2. Type in the Claude or ChatGPT desktop app as usual. Hover the hint for the audit behind it, and click it to hide it for that prompt
+3. Right-click the tray icon to pause or exit
+
+It is a PowerShell script that compiles `desktop\PromptAdvisor.cs` in memory, not an exe. Windows 11's Smart App Control blocks unsigned programs built on your own machine, and PowerShell is signed by Microsoft. If it fails to start, the reason is in `%TEMP%\PromptAdvisor.log`.
+
+`node desktop\advisor-cli.js --selftest` checks the rules without the apps open.
 
 ---
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Prompt Advisor
 // @namespace    local.deepith
-// @version      1.2.0
+// @version      1.3.0
 // @description  Reads the prompt you are typing on claude.ai or chatgpt.com and says which model and effort level it needs, when that differs from what you have picked.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -373,8 +373,15 @@
   /* The button reads e.g. "Opus 5.5 High", or "Haiku 4.5" with no effort. */
   function claudeCurrent() {
     const b = document.querySelector('[data-testid="model-selector-dropdown"]');
-    if (!b) return null;
-    const t = (b.textContent || '').replace(/\s+/g, ' ').trim();
+    return b ? parseClaudeLabel(b.textContent || '') : null;
+  }
+
+  /*
+   * Pure, so the desktop companion can call it with the button's accessible
+   * name, which carries a "Model: " prefix the page text does not.
+   */
+  function parseClaudeLabel(raw) {
+    const t = raw.replace(/^\s*model:\s*/i, '').replace(/\s+/g, ' ').trim();
     const m = t.match(/^(haiku|sonnet|opus|fable|mythos)\s*([\d.]+)?\s*(low|medium|high|extra|max)?/i);
     if (!m) return null;
     const family = m[1].toLowerCase();
@@ -382,8 +389,7 @@
     return { family, version: m[2] || '', effort, label: t };
   }
 
-  function claudeAdvice(a) {
-    const cur = claudeCurrent();
+  function claudeAdvice(a, cur = claudeCurrent()) {
     if (!cur) return null;
     const want = pick(a);
     const cm = MODEL_RANK[cur.family], wm = MODEL_RANK[want.model];
@@ -421,8 +427,11 @@
 
   const LEVEL_KEY = 'cpa-gpt-levels';
   function gptLevels() {
-    try { return JSON.parse(localStorage.getItem(LEVEL_KEY)) || { 2: 'High' }; }
-    catch (e) { return { 2: 'High' }; }
+    // Chat mode's three stops, as learned on a Plus account on 29 Sep 2026.
+    // Anything learned since overrides them.
+    const known = { 0: 'Instant', 1: 'Medium', 2: 'High' };
+    try { return { ...known, ...(JSON.parse(localStorage.getItem(LEVEL_KEY)) || {}) }; }
+    catch (e) { return known; }
   }
   function learnGptLevel() {
     const s = document.querySelector('[role="slider"][aria-valuemax="2"]');
@@ -479,8 +488,28 @@
     return { level: rank < 3 ? 0 : rank === 3 ? 1 : 2, label: t };
   }
 
-  function gptAdvice(a) {
-    const cur = gptCurrent();
+  /*
+   * The desktop app's button is one accessible name, such as "GPT-5.6 Sol
+   * Medium" or "GPT-6 Astra Light", so the effort is the trailing step name.
+   * Astra is Work mode's model and gets Work's nine-step ladder.
+   */
+  const WORK_STEPS = ['None', 'Minimal', 'Light', 'Medium', 'High', 'Extra High', 'Max', 'Ultra', 'Persistent'];
+  function parseGptButton(raw) {
+    const t = raw.replace(/\s+/g, ' ').trim();
+    const m = t.match(/^(.*?)\s+(none|minimal|instant|light|low|medium|high|extra high|max|ultra|persistent)$/i);
+    if (!m) return null;
+    const model = m[1], step = m[2];
+    if (/astra/i.test(model)) {
+      const level = WORK_STEPS.findIndex((x) => x.toLowerCase() === step.toLowerCase());
+      return level < 0 ? null : { work: true, level, steps: WORK_STEPS, label: model + ' · ' + WORK_STEPS[level] };
+    }
+    const lv = gptLevels();
+    for (const k of Object.keys(lv)) if (lv[k].toLowerCase() === step.toLowerCase()) return { level: +k, label: model + ' · ' + lv[k] };
+    const rank = GPT_NAMES.indexOf(step.toLowerCase());
+    return { level: rank < 3 ? 0 : rank === 3 ? 1 : 2, label: model + ' · ' + step };
+  }
+
+  function gptAdvice(a, cur = gptCurrent()) {
     if (!cur) return null;
     // Upward only for real reasoning or a real judgment call, as on Claude.
     const worthRaising = a.depth >= 2 || a.kind === 2;
