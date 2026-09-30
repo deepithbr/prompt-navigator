@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Prompt Advisor
 // @namespace    local.deepith
-// @version      1.5.0
+// @version      1.5.1
 // @description  Reads the prompt you are typing on claude.ai or chatgpt.com and says which model and effort level it needs, when that differs from what you have picked.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -88,7 +88,7 @@
   const CREATE = [
     ['write or draft', /\b(write|draft|compose|prepare)\b/],
     ['create or generate', /\b(create|generate|produce|come up with|brainstorm)\b/],
-    ['explain', /\b(explain|teach|walk me through|help me understand)\b/],
+    ['explain', /\b(explain|teach me|walk me through|help me understand)\b/],
     ['analyse or review', /\b(analy[sz]e|analysis|review|examine|interpret)\b/],
     ['build or code', /\b(build|implement|refactor|code|script|function|component|query|regex|api)\b/],
     ['plan or outline', /\b(plan|outline|structure|syllabus|lesson|curriculum|rubric|question paper|timetable)\b/],
@@ -544,6 +544,16 @@
     return { level: rank < 3 ? 0 : rank === 3 ? 1 : 2, label: model + ' · ' + step };
   }
 
+  // Chat mode's step for a prompt: 0 Instant, 1 Medium, 2 High.
+  function gptChatTarget(a) {
+    const worthRaising = a.depth >= 2 || a.kind === 2;
+    return (a.kind === 0 && a.depth <= 1) ? 0 : worthRaising ? 2 : 1;
+  }
+  function gptChatName(level) {
+    const lv = gptLevels();
+    return lv[level] || ['Instant', 'Medium', 'High'][level];
+  }
+
   function gptAdvice(a, cur = gptCurrent()) {
     if (!cur) return null;
     // Upward only for real reasoning or a real judgment call, as on Claude.
@@ -563,7 +573,7 @@
       return { agree: false, work: true, dir, label: model + ' · ' + want.step, cur: cur.label };
     }
 
-    const want = (a.kind === 0 && a.depth <= 1) ? 0 : worthRaising ? 2 : 1;
+    const want = gptChatTarget(a);
     if (want === cur.level) return { agree: true, cur: cur.label };
     if (want > cur.level && !worthRaising) return { agree: true, cur: cur.label };
     const lv = gptLevels();

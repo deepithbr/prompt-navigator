@@ -64,6 +64,10 @@ The same hint, from a small companion in the tray. Both desktop apps are Chromiu
 
 It reads effort as well as model. In the Claude app effort sits on its own button beside the model, "Effort: High", and the companion reads the two together. Hover the hint for what the suggested effort level is for, in Anthropic's or OpenAI's own words.
 
+One gap: ChatGPT's desktop Chat tab names its picker "Select ChatGPT model" and exposes nothing inside it, so your thinking level cannot be read there. In that tab the hint names the level the prompt needs, such as "Instant thinking suits this", and leaves the comparison to you. Work mode and Codex show the level on the button and are compared as usual.
+
+What it reads is noted, one line per change, in `%TEMP%\PromptAdvisor-reads.log`: the app, the button names and how many characters are in the box, never the text itself.
+
 It gives prompt-level advice only. Follow-ups, thread length and the new-chat suggestion need the conversation, which the desktop apps do not expose, so those stay in the browser.
 
 ---

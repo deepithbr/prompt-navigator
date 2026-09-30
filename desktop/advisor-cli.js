@@ -31,7 +31,7 @@ function loadRules() {
   // globals they touch are stood in for. localStorage is read inside a try.
   const make = new Function(
     'const CONFIG = { rereadTokens: 20000 };\n' + body
-    + '\nreturn { audit, pick, parseClaudeLabel, claudeAdvice, parseGptButton, gptAdvice, effortNote };');
+    + '\nreturn { audit, pick, parseClaudeLabel, claudeAdvice, parseGptButton, gptAdvice, effortNote, gptChatTarget, gptChatName };');
   return make();
 }
 
@@ -48,6 +48,23 @@ function answer(req) {
   const text = String(req.text || '').trim();
   if (text.length < 15) return { show: false };
   const a = R.audit(text, {});
+
+  // The ChatGPT app's Chat tab names its picker "Select ChatGPT model" and
+  // exposes nothing inside it, so your current thinking level cannot be read.
+  // Say what the prompt needs and leave the comparison to you.
+  if (req.app === 'chatgpt' && req.effort === 'unknown') {
+    const name = R.gptChatName(R.gptChatTarget(a));
+    return {
+      show: true, tone: 'info', label: name + ' thinking', verb: ' suits this', why: a.why[0], cur: 'not readable here',
+      detail: [
+        'Kind: ' + KIND[a.kind] + '. ' + a.why.join('. '),
+        'Reasoning: ' + DEPTH[a.depth] + '. ' + a.depthWhy.join(', '),
+        'Effort: ' + (R.effortNote('chatgpt', name, false) || ''),
+        "The ChatGPT app's Chat tab does not expose your thinking level, so compare this with the button yourself.",
+      ].join('\n'),
+    };
+  }
+
   const cur = req.app === 'chatgpt' ? R.parseGptButton(String(req.button || ''), req.mode === 'work')
     : R.parseClaudeLabel(String(req.button || ''));
   if (!cur) return { show: false, reason: 'could not read the model button' };
@@ -86,6 +103,7 @@ if (process.argv.includes('--selftest')) {
     { app: 'chatgpt', button: 'GPT-5.6 Sol Medium', text: 'i need a strategy for marketing a product..let me know how to do it' },
     { app: 'chatgpt', button: 'GPT-6 Astra Light', text: 'i need a strategy for marketing a product..let me know how to do it' },
     { app: 'chatgpt', mode: 'work', button: 'GPT-5.6 Sol Medium', text: 'Summarise this circular in three bullet points for the staff group.' },
+    { app: 'chatgpt', mode: 'chat', effort: 'unknown', button: '', text: 'Fix the typos in this paragraph: Teh students will recieve there marks on monday.' },
   ];
   for (const c of cases) {
     const r = answer(c);

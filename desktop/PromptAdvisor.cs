@@ -123,11 +123,12 @@ class Rules
         node = Process.Start(psi);
     }
 
-    public Dictionary<string, object> Ask(string app, string text, string button, string mode)
+    public Dictionary<string, object> Ask(string app, string text, string button, string mode, bool effortUnknown)
     {
         if (node == null || node.HasExited) Start();
         Dictionary<string, object> req = new Dictionary<string, object>();
         req["app"] = app; req["text"] = text; req["button"] = button; req["mode"] = mode;
+        if (effortUnknown) req["effort"] = "unknown";
         byte[] bytes = Encoding.UTF8.GetBytes(json.Serialize(req) + "\n");
         node.StandardInput.BaseStream.Write(bytes, 0, bytes.Length);
         node.StandardInput.BaseStream.Flush();
@@ -213,7 +214,8 @@ class HintForm : Form
         g.SmoothingMode = SmoothingMode.AntiAlias;
         int pad = (int)(9 * UiScale), dot = (int)(7 * UiScale), gap = (int)(8 * UiScale);
         Color dotColor = Tone == "down" ? Color.FromArgb(217, 119, 87)
-            : Tone == "up" ? Color.FromArgb(91, 157, 187) : Color.FromArgb(127, 163, 127);
+            : Tone == "up" ? Color.FromArgb(91, 157, 187)
+            : Tone == "info" ? Color.FromArgb(160, 156, 148) : Color.FromArgb(127, 163, 127);
         using (SolidBrush br = new SolidBrush(dotColor))
             g.FillEllipse(br, pad, (Height - dot) / 2, dot, dot);
         int x = pad + dot + gap;
@@ -325,7 +327,50 @@ class AdvisorContext : ApplicationContext
                 @"^(GPT|o\d).*\s(none|minimal|instant|light|low|medium|high|extra high|max|ultra|persistent)$",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return b;
         }
+        // ChatGPT's Chat tab: one generic name, nothing readable inside.
+        if (app == "chatgpt")
+        {
+            foreach (AutomationElement b in win.FindAll(TreeScope.Descendants, isButton))
+                if ((b.Current.Name ?? "") == "Select ChatGPT model") return b;
+        }
         return null;
+    }
+
+    // A cached element's name, or "" after forgetting it if it has gone or
+    // moved off screen, as a hidden tab's controls do.
+    static string NameOf(ref AutomationElement el)
+    {
+        if (el == null) return "";
+        try
+        {
+            if (el.Current.IsOffscreen) { el = null; return ""; }
+            return el.Current.Name ?? "";
+        }
+        catch { el = null; return ""; }
+    }
+
+    string SafeBoxName()
+    {
+        try { return box != null ? box.Current.Name : ""; } catch { return ""; }
+    }
+
+    /*
+     * What it read, one line each time it changes, in
+     * %TEMP%\PromptAdvisor-reads.log. Button names and the length of what you
+     * typed, never the text. Kept under 200 KB.
+     */
+    string lastNote = "";
+    void Note(string line)
+    {
+        if (line == lastNote) return;
+        lastNote = line;
+        try
+        {
+            string f = Path.Combine(Path.GetTempPath(), "PromptAdvisor-reads.log");
+            if (File.Exists(f) && new FileInfo(f).Length > 200000) File.Delete(f);
+            File.AppendAllText(f, DateTime.Now.ToString("HH:mm:ss") + "  " + line + Environment.NewLine);
+        }
+        catch { }
     }
 
     static AutomationElement FindNamed(AutomationElement win, string prefix)
@@ -355,8 +400,14 @@ class AdvisorContext : ApplicationContext
         while (running)
         {
             try { Tick(); }
-            catch (ElementNotAvailableException) { box = null; button = null; }
-            catch (Exception) { }
+            catch (Exception)
+            {
+                // Anything stale, forget it all and look again next pass.
+                // Keeping one dead element was the bug that blanked the hint
+                // in every Chat tab: the Code tab's effort button vanishes
+                // when you switch tabs, and every read of it threw.
+                box = null; button = null; modeButton = null; effortButton = null;
+            }
             Thread.Sleep(350);
         }
     }
@@ -381,29 +432,38 @@ class AdvisorContext : ApplicationContext
             && focused.Current.ControlType == ControlType.Edit) box = focused;
         if (box == null) { if (hint.Visible) HideHint(); return; }
 
-        if (button == null || (DateTime.Now - buttonCheckedAt).TotalSeconds > 3)
+        // Switching tabs inside one window swaps which buttons exist, so all
+        // three are looked up afresh every two seconds, and at once whenever
+        // the model button is missing.
+        if (button == null || (DateTime.Now - buttonCheckedAt).TotalSeconds > 2)
         {
-            if (button == null) button = FindButton(win, app);
-            if (app == "chatgpt" && modeButton == null) modeButton = FindModeButton(win);
-            if (app == "claude" && effortButton == null) effortButton = FindNamed(win, "Effort:");
+            button = FindButton(win, app);
+            modeButton = app == "chatgpt" ? FindModeButton(win) : null;
+            effortButton = app == "claude" ? FindNamed(win, "Effort:") : null;
             buttonCheckedAt = DateTime.Now;
         }
 
         string text = (TextOf(box) ?? "").Trim();
-        string label = button != null ? (button.Current.Name ?? "") : "";
-        // The Claude desktop app shows effort on its own button beside the
-        // model: "Model: Opus 5.5" and "Effort: Medium". Read as one.
-        if (app == "claude" && effortButton != null)
-        {
-            string e = (effortButton.Current.Name ?? "");
-            if (e.StartsWith("Effort:", StringComparison.OrdinalIgnoreCase))
-                label = label.Trim() + " " + e.Substring(7).Trim();
-        }
+        // An empty box reports its placeholder as its text ("Work with
+        // ChatGPT"), which is also its name. That is not a prompt.
+        if (text == SafeBoxName().Trim()) text = "";
+        string label = NameOf(ref button);
+        // The Claude app's Code tab shows effort on its own button beside the
+        // model, "Model: Opus 5.5" and "Effort: High". Its Chat tab puts both
+        // on one, "Model: Opus 5.5 High". Append only what is missing.
+        string e = NameOf(ref effortButton);
+        if (app == "claude" && e.StartsWith("Effort:", StringComparison.OrdinalIgnoreCase)
+            && !System.Text.RegularExpressions.Regex.IsMatch(label, @"\b(low|medium|high|extra|max)\b",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            label = label.Trim() + " " + e.Substring(7).Trim();
         // ChatGPT's desktop app says its mode on a button: "Switch mode,
         // current mode: Codex". Codex and Work share one effort ladder.
-        string modeName = modeButton != null ? (modeButton.Current.Name ?? "") : "";
-        string mode = modeName.IndexOf("current mode: Chat", StringComparison.OrdinalIgnoreCase) >= 0 ? "chat"
-            : modeName.Length > 0 ? "work" : "chat";
+        // A button named after its model ("GPT-6.1 Sol Light") is Work or
+        // Codex. The Chat tab's is just "Select ChatGPT model", and hides the
+        // thinking level from Windows entirely.
+        bool effortUnknown = app == "chatgpt" && label == "Select ChatGPT model";
+        if (effortUnknown) label = "";
+        string mode = app == "chatgpt" && !effortUnknown && label.Length > 0 ? "work" : "chat";
         System.Windows.Rect r = box.Current.BoundingRectangle;
         lastText = text;
 
@@ -413,12 +473,13 @@ class AdvisorContext : ApplicationContext
             dismissedFor = null;
         }
 
+        Note(app + " | mode " + mode + " | button '" + label + "' | box '" + SafeBoxName() + "' | " + text.Length + " chars");
         string ask = app + "|" + mode + "|" + label + "|" + text;
         Dictionary<string, object> res = null;
         if (ask != lastAsk)
         {
             lastAsk = ask;
-            res = rules.Ask(app, text, label, mode);
+            res = rules.Ask(app, text, label, mode, effortUnknown);
             if (res == null || !(res.ContainsKey("show") && (bool)res["show"])) { HideHint(); return; }
         }
 
