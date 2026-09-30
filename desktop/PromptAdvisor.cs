@@ -256,19 +256,45 @@ class AdvisorContext : ApplicationContext
         hint.CreateControl();
         IntPtr unused = hint.Handle; // so BeginInvoke works before the first Show
 
+        // Which build is running, from the same files the browser extension
+        // ships: the manifest's version and the rules file's own.
+        string version = ReadVersion(Path.Combine(dir, "..", "manifest.json"), "\"version\"");
+        string rulesVersion = ReadVersion(Path.Combine(dir, "..", "prompt-advisor.user.js"), "@version");
+
         ContextMenu menu = new ContextMenu();
+        MenuItem about = new MenuItem("Prompt Advisor " + version + ", rules " + rulesVersion);
+        about.Enabled = false;
+        menu.MenuItems.Add(about);
+        menu.MenuItems.Add("-");
         MenuItem pause = new MenuItem("Pause");
         pause.Click += delegate { paused = !paused; pause.Text = paused ? "Resume" : "Pause"; if (paused) HideHint(); };
         menu.MenuItems.Add(pause);
         menu.MenuItems.Add("Exit", delegate { Quit(); });
         tray.ContextMenu = menu;
-        tray.Text = "Prompt Advisor";
+        tray.Text = "Prompt Advisor " + version;
         tray.Icon = LoadIcon(dir);
         tray.Visible = true;
 
         worker = new Thread(Loop);
         worker.IsBackground = true;
         worker.Start();
+    }
+
+    // The first version number on the line that holds the marker.
+    static string ReadVersion(string file, string marker)
+    {
+        try
+        {
+            foreach (string line in File.ReadAllLines(file))
+            {
+                if (line.IndexOf(marker, StringComparison.Ordinal) < 0) continue;
+                System.Text.RegularExpressions.Match m =
+                    System.Text.RegularExpressions.Regex.Match(line, @"\d+\.\d+(\.\d+)?");
+                if (m.Success) return m.Value;
+            }
+        }
+        catch { }
+        return "?";
     }
 
     static Icon LoadIcon(string dir)
