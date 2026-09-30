@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Prompt Advisor
 // @namespace    local.deepith
-// @version      1.4.0
+// @version      1.5.0
 // @description  Reads the prompt you are typing on claude.ai or chatgpt.com and says which model and effort level it needs, when that differs from what you have picked.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -558,9 +558,9 @@
       else if (cm < wm) dir = 1;
       else if (ws >= 0 && cur.level > ws) dir = -1;
       else if (ws >= 0 && ws > cur.level && worthRaising) dir = 1;
-      if (!dir) return { agree: true, cur: cur.label };
+      if (!dir) return { agree: true, work: true, cur: cur.label };
       const model = cm === wm && cur.model ? cur.model : GPT_MODELS[wm];
-      return { agree: false, dir, label: model + ' · ' + want.step, cur: cur.label };
+      return { agree: false, work: true, dir, label: model + ' · ' + want.step, cur: cur.label };
     }
 
     const want = (a.kind === 0 && a.depth <= 1) ? 0 : worthRaising ? 2 : 1;
@@ -569,6 +569,52 @@
     const lv = gptLevels();
     const label = lv[want] ? lv[want] + ' thinking' : (want === 0 ? 'Lowest thinking' : want === 1 ? 'Middle thinking' : 'High thinking');
     return { agree: false, dir: want < cur.level ? -1 : 1, label, cur: cur.label };
+  }
+
+  /*
+   * What an effort step is for, in the makers' words, for the hover card.
+   * [Claude docs: Effort, Steering thinking; Claude Help Center: Change the
+   * model, effort and thinking settings; OpenAI Help Center: GPT-5.6 Sol;
+   * OpenAI: Codex models. All read 30 Sep 2026.]
+   */
+  const EFFORT_NOTES = {
+    claude: {
+      low: 'Low skips thinking for simple tasks where speed matters most, and stretches your usage furthest.',
+      medium: 'Medium is the default on Opus 5.5, and on Sonnet 5.5 in the apps. It may skip thinking for simple queries.',
+      high: 'High gives deep reasoning on complex tasks. Anthropic calls it the best overall balance of quality and speed.',
+      extra: 'Extra is designed for long-running coding and agentic tasks, not chat.',
+      max: 'Max is the most thorough and uses your limits fastest. Anthropic reserves it for work where it has measured a gain.',
+    },
+    chat: {
+      instant: 'Instant gives fast responses for everyday questions.',
+      medium: 'Medium is standard thinking.',
+      high: 'High is extended thinking, and uses your limits faster.',
+    },
+    work: {
+      light: 'Light suits quick, well-scoped tasks.',
+      medium: 'Medium balances speed and depth for tasks that need more planning.',
+      high: 'High suits difficult work with multiple steps, sources or trade-offs.',
+      'extra high': 'Extra High suits difficult work with multiple steps, sources or trade-offs.',
+      max: 'Most tasks do not need Max, says OpenAI.',
+      ultra: 'Most tasks do not need Ultra, says OpenAI.',
+    },
+  };
+  function effortNote(site, label, work) {
+    const t = String(label || '').toLowerCase();
+    if (site === 'claude' && /haiku/.test(t)) return 'Haiku 4.5 has no effort setting.';
+    // OpenAI names a starting step per Work model, which is not the same as
+    // that step's general meaning.
+    if (work && /luna/.test(t) && /\bhigh\b/.test(t) && !/extra high/.test(t)) {
+      return "OpenAI says to start Luna at High. It is Luna's usual step for summaries and extraction, not a sign of hard work.";
+    }
+    if (work && /astra/.test(t) && /\blight\b/.test(t)) {
+      return 'OpenAI says to start Astra at Light. Astra brings the capability, so it rarely needs more.';
+    }
+    const table = site === 'claude' ? EFFORT_NOTES.claude : work ? EFFORT_NOTES.work : EFFORT_NOTES.chat;
+    const hit = Object.keys(table)
+      .filter((k) => new RegExp('\\b' + k + '\\b').test(t))
+      .sort((x, y) => y.length - x.length)[0];
+    return hit ? table[hit] : null;
   }
 
   /* ------------------------------------------------------------------ *
@@ -783,6 +829,8 @@
         : '~' + fmtK(t.tokens) + ' tokens' + (t.window ? ' of a ' + fmtK(t.window) + ' window, ' + t.band : '')
           + (t.trimmed ? ', earlier turns trimmed' : '')]);
     }
+    const note = effortNote(SITE, lastAdvice.agree ? lastAdvice.cur : lastAdvice.label, lastAdvice.work);
+    if (note) rows.push(['Effort', note]);
     if (lastAdvice.alt) {
       rows.push(['Or', lastAdvice.alt + ' on the model you have. Anthropic says tuning effort '
         + 'is often a better lever than switching models.']);

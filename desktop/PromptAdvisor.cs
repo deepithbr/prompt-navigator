@@ -242,7 +242,7 @@ class AdvisorContext : ApplicationContext
 
     // What the worker last saw, so the rules are asked only when it changes.
     IntPtr lastWindow = IntPtr.Zero;
-    AutomationElement box, button, modeButton;
+    AutomationElement box, button, modeButton, effortButton;
     string lastAsk = "", dismissedFor = null;
     DateTime buttonCheckedAt = DateTime.MinValue;
 
@@ -328,6 +328,17 @@ class AdvisorContext : ApplicationContext
         return null;
     }
 
+    static AutomationElement FindNamed(AutomationElement win, string prefix)
+    {
+        Condition isButton = new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button);
+        foreach (AutomationElement b in win.FindAll(TreeScope.Descendants, isButton))
+        {
+            string n = b.Current.Name ?? "";
+            if (n.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return b;
+        }
+        return null;
+    }
+
     static AutomationElement FindModeButton(AutomationElement win)
     {
         Condition isButton = new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button);
@@ -361,7 +372,7 @@ class AdvisorContext : ApplicationContext
         if (app == null) { if (hint.Visible) HideHint(); lastWindow = IntPtr.Zero; return; }
 
         AutomationElement win = AutomationElement.FromHandle(fg);
-        if (fg != lastWindow) { lastWindow = fg; box = null; button = null; modeButton = null; lastAsk = ""; }
+        if (fg != lastWindow) { lastWindow = fg; box = null; button = null; modeButton = null; effortButton = null; lastAsk = ""; }
 
         // The text box is whichever editable field you last focused in this
         // window. Remember it, so opening the model menu does not lose it.
@@ -374,11 +385,20 @@ class AdvisorContext : ApplicationContext
         {
             if (button == null) button = FindButton(win, app);
             if (app == "chatgpt" && modeButton == null) modeButton = FindModeButton(win);
+            if (app == "claude" && effortButton == null) effortButton = FindNamed(win, "Effort:");
             buttonCheckedAt = DateTime.Now;
         }
 
         string text = (TextOf(box) ?? "").Trim();
         string label = button != null ? (button.Current.Name ?? "") : "";
+        // The Claude desktop app shows effort on its own button beside the
+        // model: "Model: Opus 5.5" and "Effort: Medium". Read as one.
+        if (app == "claude" && effortButton != null)
+        {
+            string e = (effortButton.Current.Name ?? "");
+            if (e.StartsWith("Effort:", StringComparison.OrdinalIgnoreCase))
+                label = label.Trim() + " " + e.Substring(7).Trim();
+        }
         // ChatGPT's desktop app says its mode on a button: "Switch mode,
         // current mode: Codex". Codex and Work share one effort ladder.
         string modeName = modeButton != null ? (modeButton.Current.Name ?? "") : "";

@@ -62,6 +62,8 @@ The thread size and earlier questions come from the Prompt Navigator and the Cha
 
 The same hint, from a small companion in the tray. Both desktop apps are Chromium inside signed Store packages, so nothing can be added to them. The companion reads them from outside through Windows UI Automation, the interface screen readers use: the text box you are typing in and the model button beside it. It runs the same rules as the extension, loaded from `prompt-advisor.user.js` itself, and draws the answer as one line above the text box. It never types or clicks in the apps and never touches the network.
 
+It reads effort as well as model. In the Claude app effort sits on its own button beside the model, "Effort: High", and the companion reads the two together. Hover the hint for what the suggested effort level is for, in Anthropic's or OpenAI's own words.
+
 It gives prompt-level advice only. Follow-ups, thread length and the new-chat suggestion need the conversation, which the desktop apps do not expose, so those stay in the browser.
 
 ---

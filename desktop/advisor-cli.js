@@ -31,13 +31,18 @@ function loadRules() {
   // globals they touch are stood in for. localStorage is read inside a try.
   const make = new Function(
     'const CONFIG = { rereadTokens: 20000 };\n' + body
-    + '\nreturn { audit, pick, parseClaudeLabel, claudeAdvice, parseGptButton, gptAdvice };');
+    + '\nreturn { audit, pick, parseClaudeLabel, claudeAdvice, parseGptButton, gptAdvice, effortNote };');
   return make();
 }
 
 const R = loadRules();
 const KIND = ['Transform', 'Create or analyse', 'Judgment'];
 const DEPTH = ['One shot', 'Some steps', 'Many dependent steps', 'Hard reasoning'];
+
+function effortLine(app, adv) {
+  const note = R.effortNote(app, adv.agree ? adv.cur : adv.label, adv.work);
+  return note ? 'Effort: ' + note : '';
+}
 
 function answer(req) {
   const text = String(req.text || '').trim();
@@ -52,6 +57,7 @@ function answer(req) {
     'Kind: ' + KIND[a.kind] + '. ' + a.why.join('. '),
     'Reasoning: ' + DEPTH[a.depth] + '. ' + a.depthWhy.join(', '),
     'Size: ~' + a.tokens + ' tokens typed',
+    effortLine(req.app, adv),
     adv.alt ? 'Or ' + adv.alt + ' on the model you have. Anthropic says tuning effort is often a better lever than switching models.' : '',
     req.app === 'claude' && cur.effort == null
       ? 'Your effort is not shown on this button, so only the model is compared.' : '',
@@ -74,6 +80,7 @@ if (process.argv.includes('--selftest')) {
   const cases = [
     { app: 'claude', button: 'Model: Opus 5.5 High', text: 'Make this email more formal: hi all, lab shut tomorrow' },
     { app: 'claude', button: 'Model: Opus 5.5', text: 'Write a lesson plan for a 50 minute session on photosynthesis for class 8.' },
+    { app: 'claude', button: 'Model: Opus 5.5 Medium', text: 'Write a lesson plan for a 50 minute session on photosynthesis for class 8.' },
     { app: 'claude', button: 'Model: Opus 5.5 High', text: 'Should we move the BCA to a trimester system? Weigh the trade-offs and forecast every scenario.' },
     { app: 'chatgpt', button: 'GPT-5.6 Sol Medium', text: 'Fix the typos in this paragraph: Teh students will recieve there marks on monday.' },
     { app: 'chatgpt', button: 'GPT-5.6 Sol Medium', text: 'i need a strategy for marketing a product..let me know how to do it' },
