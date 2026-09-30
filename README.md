@@ -97,7 +97,9 @@ Needs Windows and Node.js.
 2. Type in the Claude or ChatGPT desktop app as usual. Hover the hint for the audit behind it, and click it to hide it for that prompt
 3. Right-click the tray icon to pause or exit
 
-To have it start by itself, register it with Task Scheduler rather than the Startup folder. A task can start it at login and again at every unlock, which covers waking from sleep, and it runs outside any other app, so nothing else closing takes it down. A second copy exits at once, so repeated triggers are harmless. The task's action is `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "<this folder>\desktop\PromptAdvisor.ps1"`, with triggers At log on and On workstation unlock, and the three-day run limit switched off.
+To have it start by itself, register it with Task Scheduler rather than the Startup folder. A task can start it at login and again at every unlock, which covers waking from sleep, and it runs outside any other app, so nothing else closing takes it down. A second copy exits at once, so repeated triggers are harmless. The task's action is `conhost.exe --headless powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "<this folder>\desktop\PromptAdvisor.ps1"`, with triggers At log on and On workstation unlock, and the three-day run limit switched off.
+
+The `conhost --headless` part matters on Windows 11. Without it PowerShell opens in Windows Terminal, which can show a window even when told to hide, and closing that window ends the companion. `Start.cmd` launches the same way.
 
 Each start is noted in `%TEMP%\PromptAdvisor.log`. If it crashes it restarts itself after ten seconds, up to five times.
 
