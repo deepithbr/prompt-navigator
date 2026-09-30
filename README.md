@@ -97,6 +97,10 @@ Needs Windows and Node.js.
 2. Type in the Claude or ChatGPT desktop app as usual. Hover the hint for the audit behind it, and click it to hide it for that prompt
 3. Right-click the tray icon to pause or exit
 
+To have it start by itself, register it with Task Scheduler rather than the Startup folder. A task can start it at login and again at every unlock, which covers waking from sleep, and it runs outside any other app, so nothing else closing takes it down. A second copy exits at once, so repeated triggers are harmless. The task's action is `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "<this folder>\desktop\PromptAdvisor.ps1"`, with triggers At log on and On workstation unlock, and the three-day run limit switched off.
+
+Each start is noted in `%TEMP%\PromptAdvisor.log`. If it crashes it restarts itself after ten seconds, up to five times.
+
 It is a PowerShell script that compiles `desktop\PromptAdvisor.cs` in memory, not an exe. Windows 11's Smart App Control blocks unsigned programs built on your own machine, and PowerShell is signed by Microsoft. If it fails to start, the reason is in `%TEMP%\PromptAdvisor.log`.
 
 `node desktop\advisor-cli.js --selftest` checks the rules without the apps open.
