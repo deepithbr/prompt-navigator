@@ -52,6 +52,12 @@ public static class AdvisorHost
         }
 
         Application.EnableVisualStyles();
+        // Let an error on the window thread end Run, so PromptAdvisor.ps1
+        // logs it and starts again, instead of a dialog nobody sees on a
+        // hidden process. Windows allows this only before the first window,
+        // so a restart in the same process skips it.
+        try { Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException); }
+        catch (InvalidOperationException) { }
         Application.Run(new AdvisorContext(dir));
         GC.KeepAlive(one);
     }
