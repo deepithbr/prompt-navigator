@@ -246,6 +246,7 @@ class AdvisorContext : ApplicationContext
     readonly NotifyIcon tray = new NotifyIcon();
     readonly Rules rules;
     readonly Thread worker;
+    TaskBoard board;
     volatile bool running = true, paused = false;
 
     // What the worker last saw, so the rules are asked only when it changes.
@@ -272,6 +273,7 @@ class AdvisorContext : ApplicationContext
         about.Enabled = false;
         menu.MenuItems.Add(about);
         menu.MenuItems.Add("-");
+        menu.MenuItems.Add("Tasks", delegate { if (board != null) board.Show(); });
         MenuItem pause = new MenuItem("Pause");
         pause.Click += delegate { paused = !paused; pause.Text = paused ? "Resume" : "Pause"; if (paused) HideHint(); };
         menu.MenuItems.Add(pause);
@@ -280,6 +282,11 @@ class AdvisorContext : ApplicationContext
         tray.Text = "Prompt Advisor " + version;
         tray.Icon = LoadIcon(dir);
         tray.Visible = true;
+
+        // The task board: left-click the icon, or a notification, to open it.
+        board = new TaskBoard(tray, hint);
+        tray.MouseClick += delegate (object s, MouseEventArgs e) { if (e.Button == MouseButtons.Left) board.Show(); };
+        tray.BalloonTipClicked += delegate { board.Show(); };
 
         worker = new Thread(Loop);
         worker.IsBackground = true;
@@ -317,6 +324,7 @@ class AdvisorContext : ApplicationContext
     {
         running = false;
         tray.Visible = false;
+        if (board != null) board.Stop();
         rules.Stop();
         ExitThread();
     }

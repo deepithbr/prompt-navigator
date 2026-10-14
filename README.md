@@ -70,6 +70,31 @@ What it reads is noted, one line per change, in `%TEMP%\PromptAdvisor-reads.log`
 
 It gives prompt-level advice only. Follow-ups, thread length and the new-chat suggestion need the conversation, which the desktop apps do not expose, so those stay in the browser.
 
+**One task board for everything**
+
+Left-click the tray icon for one list of every Claude and ChatGPT task on the PC: working, done, or waiting for you, with a Windows notification when a task finishes or needs you. Double-click a task to bring its app forward.
+
+| Source | How it reports |
+|---|---|
+| Claude Code, desktop app and terminal | Three hooks in `~/.claude/settings.json`: a prompt starting, Claude stopping, and a permission request. Every session, with its first prompt as the title |
+| Claude and ChatGPT in Brave | The extension's `task-reporter.js` sees the site's Stop button appear and go, and its background script passes that to the board |
+| Claude app (Chat and Cowork) and ChatGPT app (Chat, Work, Codex) | The board watches each app's Stop button. Only the conversation on screen, and without its title, which the apps do not expose |
+
+The hooks, each set to run in the background so it can never hold up a prompt:
+
+```json
+"UserPromptSubmit": [{ "hooks": [{ "type": "command", "async": true,
+  "command": "curl -s -m 2 -o /dev/null -H 'X-Prompt-Advisor: 1' --data-binary @- http://127.0.0.1:47823/hook/claude-code/start || true" }] }],
+"Stop": [ ...the same, ending /hook/claude-code/stop ],
+"Notification": [{ "matcher": "permission_prompt|elicitation_dialog", ...ending /hook/claude-code/needs }]
+```
+
+Codex in a terminal can report too, through `notify` in `~/.codex/config.toml`, posting to `/hook/codex`. The Codex desktop app already uses that slot for its own computer-use tool and it holds one command, so leave it alone there; the board's app watcher covers the desktop app.
+
+The board listens on `127.0.0.1:47823` only, never on the network, and refuses any request without the header `X-Prompt-Advisor: 1`. A web page cannot add that header to a request to another address without a preflight check the board never answers, so a site you visit cannot post to it. Tasks are kept in `%LOCALAPPDATA%\PromptAdvisor\tasks.json`, the last 60.
+
+If its notifications never appear, check Windows **Do not disturb**, the bell icon at the right of the taskbar. It holds back every app's banners, the board's included, and Windows can switch it on by itself on a schedule or while an app is full screen. Settings → System → Notifications lists those rules, and lets you add apps that may notify you anyway.
+
 ---
 
 ## Install as a Chrome extension
@@ -80,7 +105,7 @@ It gives prompt-level advice only. Follow-ups, thread length and the new-chat su
 4. Click **Load unpacked** and choose the repository folder
 5. Reload any open Claude or ChatGPT tab
 
-No permissions are requested. The extension declares no `permissions` and no `host_permissions`; the two content scripts only run on the sites listed in the manifest.
+One permission is requested, and it points at your own PC: `http://127.0.0.1:47823/*`, so the extension can tell the desktop task board when a reply finishes. It declares no other `permissions` or `host_permissions`, and its content scripts only run on the sites listed in the manifest.
 
 ## Install as userscripts instead
 
@@ -103,7 +128,7 @@ The `conhost --headless` part matters on Windows 11. Without it PowerShell opens
 
 Each start is noted in `%TEMP%\PromptAdvisor.log`. If it crashes it restarts itself after ten seconds, up to five times.
 
-It is a PowerShell script that compiles `desktop\PromptAdvisor.cs` in memory, not an exe. Windows 11's Smart App Control blocks unsigned programs built on your own machine, and PowerShell is signed by Microsoft. If it fails to start, the reason is in `%TEMP%\PromptAdvisor.log`.
+It is a PowerShell script that compiles `desktop\PromptAdvisor.cs` and `desktop\TaskBoard.cs` in memory, not an exe. Windows 11's Smart App Control blocks unsigned programs built on your own machine, and PowerShell is signed by Microsoft. If it fails to start, the reason is in `%TEMP%\PromptAdvisor.log`.
 
 `node desktop\advisor-cli.js --selftest` checks the rules without the apps open.
 
@@ -111,7 +136,7 @@ It is a PowerShell script that compiles `desktop\PromptAdvisor.cs` in memory, no
 
 ## What it reads
 
-Everything stays in your browser. Nothing is sent anywhere, and there is no server and no analytics.
+Everything stays on your PC. Nothing is sent to any server, and there are no analytics. The only thing that leaves the browser is a finished-reply notice, the tab's title and address with "working" or "done", sent to the task board at `127.0.0.1` on this same computer. If the board is not running it goes nowhere.
 
 Two things are stored locally, both on your own machine and neither ever transmitted:
 

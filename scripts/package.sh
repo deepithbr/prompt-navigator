@@ -13,6 +13,6 @@ version=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' manifest.json)
 out="prompt-navigator-$version.zip"
 git archive --format=zip -o "$out" HEAD \
   manifest.json claude-prompt-navigator.user.js chatgpt-usage.user.js \
-  prompt-advisor.user.js \
+  prompt-advisor.user.js task-reporter.js background.js \
   icons README.md LICENSE
 echo "$out"

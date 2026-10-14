@@ -1,6 +1,6 @@
 # Starts the Prompt Advisor desktop companion.
 #
-# Compiles PromptAdvisor.cs in memory and runs it, because Smart App Control
+# Compiles PromptAdvisor.cs and TaskBoard.cs in memory and runs it, because Smart App Control
 # blocks unsigned exes built on this machine. Run it hidden with Start.cmd, or:
 #   powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File PromptAdvisor.ps1
 #
@@ -15,7 +15,7 @@ $fw = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
 function Note($text) { "$(Get-Date -Format s)  $text" | Out-File -Append -Encoding UTF8 $log }
 
 try {
-  Add-Type -TypeDefinition (Get-Content -Raw -Encoding UTF8 (Join-Path $dir 'PromptAdvisor.cs')) -ReferencedAssemblies @(
+  Add-Type -Path @((Join-Path $dir 'PromptAdvisor.cs'), (Join-Path $dir 'TaskBoard.cs')) -ReferencedAssemblies @(
     'System.Windows.Forms', 'System.Drawing', 'System.Web.Extensions',
     (Join-Path $fw 'WPF\UIAutomationClient.dll'),
     (Join-Path $fw 'WPF\UIAutomationTypes.dll'),

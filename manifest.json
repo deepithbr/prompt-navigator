@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Prompt Navigator for Claude",
-  "version": "3.18.2",
-  "description": "Jump between your own questions in a Claude chat, search them across every thread, see the documents a thread produced, read your plan usage, and see which model and effort a prompt needs. Adds a usage meter to ChatGPT too.",
+  "version": "3.19.0",
+  "description": "Jump between your own questions in a Claude chat, search them across every thread, see the documents a thread produced, read your plan usage, see which model and effort a prompt needs, and report finished replies to a task board on your PC. Adds a usage meter to ChatGPT too.",
   "homepage_url": "https://github.com/deepithbr/prompt-navigator",
 
   "icons": {
@@ -11,6 +11,12 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "host_permissions": ["http://127.0.0.1:47823/*"],
 
   "content_scripts": [
     {
@@ -30,6 +36,11 @@
       "js": ["prompt-advisor.user.js"],
       "run_at": "document_idle",
       "world": "MAIN"
+    },
+    {
+      "matches": ["https://claude.ai/*", "https://chatgpt.com/*", "https://chat.openai.com/*"],
+      "js": ["task-reporter.js"],
+      "run_at": "document_idle"
     }
   ]
 }
