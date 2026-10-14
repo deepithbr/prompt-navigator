@@ -12,7 +12,9 @@
 // The receiver listens on 127.0.0.1 only, never on the network, and every
 // request must carry the header X-Prompt-Advisor: 1. A web page cannot send a
 // custom header to another origin without a CORS preflight this never
-// answers, so a site you visit cannot post fake tasks to it.
+// answers, so a site you visit cannot post fake tasks to it. A site that
+// rebinds its own name to 127.0.0.1 gets past that, so the Host must also be
+// 127.0.0.1 or localhost, and any Origin must be the extension.
 
 using System;
 using System.Collections.Generic;
@@ -255,6 +257,7 @@ public class TaskBoard
                 string[] first = lines[0].Split(' ');
                 string method = first[0], path = first.Length > 1 ? first[1] : "/";
                 int length = 0; bool ours = false;
+                string host = "", origin = "";
                 foreach (string l in lines)
                 {
                     int i = l.IndexOf(':');
@@ -262,6 +265,8 @@ public class TaskBoard
                     string k = l.Substring(0, i).Trim().ToLowerInvariant(), v = l.Substring(i + 1).Trim();
                     if (k == "content-length") int.TryParse(v, out length);
                     if (k == "x-prompt-advisor" && v == "1") ours = true;
+                    if (k == "host") host = v.ToLowerInvariant();
+                    if (k == "origin") origin = v.ToLowerInvariant();
                 }
                 int bodyStart = headEnd + 4;
                 byte[] body = new byte[Math.Max(0, length)];
@@ -273,8 +278,16 @@ public class TaskBoard
                     if (n <= 0) break;
                     have += n;
                 }
+                // DNS rebinding: a site can point its own name at 127.0.0.1,
+                // and then its pages count as same-origin and may send the
+                // custom header. Such a request still names the site in Host
+                // and Origin, so only this machine's own names are accepted,
+                // and only the extension, or no browser at all, as the origin.
+                bool localHost = host == "127.0.0.1:" + Port || host == "localhost:" + Port;
+                bool okOrigin = origin.Length == 0 || origin.StartsWith("chrome-extension://");
+                if (!localHost || !okOrigin) ours = false;
                 string status = "204 No Content";
-                if (method == "GET" && path == "/ping") status = "200 OK";
+                if (method == "GET" && path == "/ping") status = localHost ? "200 OK" : "403 Forbidden";
                 else if (method == "POST" && path == "/show" && ours) Show();
                 else if (method != "POST" || !ours) status = "403 Forbidden";
                 else Route(path, Encoding.UTF8.GetString(body, 0, have));
