@@ -291,6 +291,9 @@ public class TaskBoard
                 else if (method == "POST" && path == "/show" && ours) Show();
                 else if (method != "POST" || !ours) status = "403 Forbidden";
                 else Route(path, Encoding.UTF8.GetString(body, 0, have));
+                // One line per request, so a report that never shows up can be
+                // traced: no line means it never reached the board.
+                BoardLog(method + " " + path + " host=" + host + " origin=" + (origin.Length > 0 ? origin : "-") + " -> " + status);
                 byte[] reply = Encoding.ASCII.GetBytes("HTTP/1.1 " + status + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
                 s.Write(reply, 0, reply.Length);
             }
@@ -438,6 +441,18 @@ public class TaskBoard
             GetWindowThreadProcessId(GetForegroundWindow(), out fgPid);
             Upsert(w.Key, label, null, "done", "", proc == "claude" ? "claude" : "chatgpt", fgPid == (uint)p.Id);
         }
+    }
+
+    // %TEMP%\PromptAdvisor-board.log, kept under 200 KB.
+    static void BoardLog(string line)
+    {
+        try
+        {
+            string f = Path.Combine(Path.GetTempPath(), "PromptAdvisor-board.log");
+            if (File.Exists(f) && new FileInfo(f).Length > 200000) File.Delete(f);
+            File.AppendAllText(f, DateTime.Now.ToString("HH:mm:ss") + "  " + line + Environment.NewLine);
+        }
+        catch { }
     }
 
     static void Log(string line)
