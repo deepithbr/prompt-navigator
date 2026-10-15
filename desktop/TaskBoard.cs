@@ -428,7 +428,7 @@ public class TaskBoard
         {
             w.Key = "app:" + proc + ":" + DateTime.Now.Ticks;
             w.Running = true;
-            Upsert(w.Key, label, label + (mode.Length > 0 ? " \u00B7 " + mode : "") + " \u00B7 started " + DateTime.Now.ToString("HH:mm"), "working", "", proc == "claude" ? "claude" : "chatgpt", false);
+            Upsert(w.Key, label, label + (mode.Length > 0 ? " \u00B7 " + mode : "") + " \u00B7 started " + DateTime.Now.ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture), "working", "", proc == "claude" ? "claude" : "chatgpt", false);
         }
         else if (!stop && w.Running)
         {
