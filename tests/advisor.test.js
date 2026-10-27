@@ -19,8 +19,8 @@ const cases = [
   ['Make this email more formal.', 'haiku', null],
   ['Fix the typos in the fee notice before it goes to parents.', 'sonnet', 0],
   ['What is a credit hour?', 'haiku', null],
-  ['Write a lesson plan for a 50 minute session on photosynthesis for class 8.', 'sonnet', 0],
-  ['Draft a question paper for BCA semester 3 data structures. It must have exactly 5 units, each unit must carry 14 marks, no more than 2 questions per unit can be numerical, and every question must map to a course outcome.', 'sonnet', 2],
+  ['Write a lesson plan for a 50 minute session on photosynthesis for class 8.', 'sonnet', 1],
+  ['Draft a question paper for BCA semester 3 data structures. It must have exactly 5 units, each unit must carry 14 marks, no more than 2 questions per unit can be numerical, and every question must map to a course outcome.', 'sonnet', 1],
   ['Should we raise the BCA fee to 1.2 lakh next year?', 'opus', 1],
   ['Critique my plan to split the BCA into two sections and tell me the weakest assumption.', 'opus', 1],
   ['Why does this function return undefined?\n```js\nfunction f(a){ a.map(x => x*2) }\n```', 'sonnet', 1],
@@ -33,9 +33,12 @@ const cases = [
   ['Convert this table into CSV.', 'haiku', null],
   ['Explain the pros and cons of Python and Java for a first-year course.', 'sonnet', 0],
   ['What are the trade-offs for us in moving the BCA to Aloysius timings?', 'opus', 1],
-  ['Write a mobile phone policy for students.', 'sonnet', 0],
-  ['Review this contract clause and tell me if we are exposed.', 'opus', 1],
-  ['Evaluate this essay against the rubric and give a mark out of 20.', 'sonnet', 0],
+  ['Write a mobile phone policy for students.', 'sonnet', 1],
+  ['Review this contract clause and tell me if we are exposed.', 'opus', 2],
+  ['Evaluate this essay against the rubric and give a mark out of 20.', 'sonnet', 1],
+  ['Give me a rough outline for tomorrow\'s assembly speech on exam stress.', 'sonnet', 0],
+  ['Fact-check these figures before the fee circular goes to parents.', 'sonnet', 2],
+  ['Do the full research report on our placement data across all three years, end to end. I will be away, so do not ask me questions. It goes to the board on Monday, so it is critical.', 'opus', 3],
   ['hi', 'haiku', null],
   ['Shud we follow this in our current CI for outputs..', 'opus', 1],
 ];
@@ -54,8 +57,8 @@ for (const [p, m, e] of cases) {
 const PAPER = cases[7][0];
 const FEE = 'Should we raise the BCA fee to 1.2 lakh next year?';
 const threads = [
-  [[PAPER], 'now do the same for sem 4', 'sonnet', 2],
-  [[PAPER, 'yes go ahead'], 'same for sem 5 as well', 'sonnet', 2],
+  [[PAPER], 'now do the same for sem 4', 'sonnet', 1],
+  [[PAPER, 'yes go ahead'], 'same for sem 5 as well', 'sonnet', 1],
   [[FEE], 'ok, and the MCA fee too?', 'opus', 1],
   [[FEE], 'Make this email more formal: hi all, lab shut tomorrow', 'haiku', null],
 ];
@@ -118,7 +121,7 @@ const work = [
   ['Fix the typos in this paragraph: Teh students will recieve there marks on monday.', 'GPT-6 Luna · High'],
   ['i need a strategy for marketing a product..let me know how to do it', 'GPT-6.1 Sol · Medium'],
   ['Write a lesson plan for a 50 minute session on photosynthesis for class 8.', 'GPT-6.1 Sol · Light'],
-  [cases[7][0], 'GPT-6.1 Sol · High'],
+  [cases[7][0], 'GPT-6.1 Sol · Medium'],
   [cases[12][0], 'GPT-6 Astra · Light'],
 ];
 console.log('');

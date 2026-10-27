@@ -45,10 +45,12 @@ It scores each prompt on two separate axes, because model and effort buy differe
 | | One shot | Some steps | Many steps | Hard |
 |---|---|---|---|---|
 | **Transform** (rewrite, summarise, translate, extract) | Haiku 4.5 | Sonnet 5.5 · Low | Sonnet 5.5 · Medium | Sonnet 5.5 · High |
-| **Create or analyse** (write, explain, code, plan) | Sonnet 5.5 · Low | Sonnet 5.5 · Medium | Sonnet 5.5 · High | Opus 5.5 · High |
+| **Create or analyse** (write, explain, code, plan) | Sonnet 5.5 · Medium, or Low for brainstorms, rough drafts and short explainers | Sonnet 5.5 · Medium | Sonnet 5.5 · High | Opus 5.5 · High |
 | **Judgment** (should we, trade-offs, critique, strategy) | Opus 5.5 · Medium | Opus 5.5 · Medium | Opus 5.5 · High | Opus 5.5 · High |
 
 The grid follows Anthropic's own guidance, checked on 30 September 2026. Medium is the default on Opus 5.5, and on Sonnet 5.5 in the apps. High is for complex reasoning. Extra is described as "designed for long-running coding and agentic tasks", which a chat prompt is not, so it is not suggested, and neither is Max. When the hint suggests a smaller model, the hover card also names the same step down in effort on the model you already have, because Anthropic says "tuning effort is often a better lever than switching models".
+
+Three refinements come from Ben AI's Effort Optimizer, a Claude Code mod whose four questions line up with Anthropic's guidance. Work meant to go back and forth, such as brainstorms, rough drafts, outlines and quick tweaks, stays at Low. A check where a missed error would cost money, a client or trust, such as fact-checking figures before a fee circular goes out or reviewing a contract for exposure, goes to High. Rules to follow are not reasoning to do, so a format with many rules ("exactly 5 units, 14 marks each") stays at Medium, and constraints only push effort higher when they meet a calculation or a schedule, where they can clash. The one place Extra is suggested is a long, hard and critical job handed off to run alone, which needs all three signs at once: a handoff ("end to end", "don't ask me questions"), something critical riding on it, and real size or difficulty.
 
 Stakes move a prompt in the direction its errors come from. On writing or analysis about fees, contracts, hiring or accreditation the model goes up, because a wrong call there is a judgment error. On a calculation about the same things the effort goes up instead, because a wrong sum is a slipped step, and a bigger model doesn't prevent that. Max effort and Fable 5.1 are never suggested. The picker itself warns that Max costs 5.5 times or more. Anthropic points to Fable 5.1 for problems Opus has already struggled with, which a single prompt cannot show, and on Pro it draws on usage credits.
 

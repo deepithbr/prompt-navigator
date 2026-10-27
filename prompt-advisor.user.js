@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Prompt Advisor
 // @namespace    local.deepith
-// @version      1.5.1
+// @version      1.6.0
 // @description  Reads the prompt you are typing on claude.ai or chatgpt.com and says which model and effort level it needs, when that differs from what you have picked.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -119,6 +119,21 @@
     ['accreditation', /\b(accreditation|naac|nba|ugc|aicte|nirf|affiliation)\b/],
   ];
 
+  /*
+   * Three readings taken from Ben AI's Effort Optimizer, a Claude Code mod
+   * (Oct 2026), whose four questions match Anthropic's own effort guidance:
+   * work meant to go back and forth is Low, a hidden mistake that costs money
+   * or trust is High, and only a long, hard, critical job handed off to run
+   * alone earns Extra. It also holds that rule-following work stays Low or
+   * Medium, which is applied to constraints below.
+   */
+  // Drafted to be changed: brainstorms, rough drafts, outlines, tweaks.
+  const ITERATIVE = /\b(brainstorm|ideas? for|some ideas|options for|rough (draft|outline|version)|first draft|quick (draft|outline|version|summary)|outline|tweak|just a (quick|short))\b/;
+  // Handed off to run alone.
+  const HANDOFF = /\b(don'?t ask (me )?(any )?questions|without asking|i('ll| will) be (away|offline|out)|while i'?m (away|out)|end[- ]to[- ]end|the (whole|entire|full) (thing|report|document|analysis|deck)|full (research )?report|complete (report|analysis|review)|one shot|in one go)\b/;
+  // Relied on without being checked again.
+  const CRITICAL = /\b(critical|crucial|final version|before (signing|i sign|we sign)|goes to (the )?(board|client|investors?|management|university|principal)|investors?|sign(ing)? off|no room for (error|mistakes))\b/;
+
   // Depth of reasoning.
   const STEPS = [
     ['step by step', /\bstep[- ]by[- ]step\b/],
@@ -130,10 +145,11 @@
     ['every case', /\b(edge cases?|corner cases?|all (the )?(cases|combinations|permutations|scenarios|possibilities)|every (combination|case|scenario|permutation)|permutations)\b/],
     ['compare', /\b(compare|comparison|versus|vs\.?)\b/],
     ['multi-part plan', /\b(phases?|milestones?|dependencies|sequence|critical path)\b/],
+    ['verification', /\b(fact[- ]?check|verify|double[- ]check|cross[- ]check|reconcile|check (the )?(numbers|figures|totals|calculations|facts|sources)|audit the|review (it |this |the )?for (risk|errors|mistakes)|(are we|we are|we're|am i|i am) exposed|any (risks?|loopholes)|find (the )?(errors|mistakes))\b/],
   ];
 
   // Steps where an error is a slip in the working rather than a poor call.
-  const REASONING_LED = ['arithmetic', 'forecast or model', 'proof or derivation', 'optimise or schedule', 'debug'];
+  const REASONING_LED = ['arithmetic', 'forecast or model', 'proof or derivation', 'optimise or schedule', 'debug', 'verification'];
 
   const CONSTRAINT = /\b(must|mustn'?t|must not|without|at least|at most|no more than|no less than|exactly|only if|unless|except|each|every|constraint|requirement|cannot|can'?t exceed|within)\b/g;
 
@@ -193,10 +209,17 @@
     }
 
     // Depth of reasoning.
+    const reasoningLed = steps.some((x) => REASONING_LED.includes(x));
     let score = steps.length;
     const depthWhy = [];
     if (steps.length) depthWhy.push(steps.join(', '));
-    if (constraints >= 3) { score += Math.floor(constraints / 3); depthWhy.push(constraints + ' constraints'); }
+    // Rules to follow are not reasoning to do. "Exactly 5 units, 14 marks
+    // each" is a format, and stays one step up. Constraints only earn more
+    // when they meet a calculation or a schedule, where they can clash.
+    if (constraints >= 3) {
+      score += reasoningLed ? Math.floor(constraints / 3) : 1;
+      depthWhy.push(constraints + (reasoningLed ? ' constraints to hold at once' : ' rules to follow'));
+    }
     if (listLines >= 5) { score += 1; depthWhy.push(listLines + ' listed requirements'); }
     // A fault in a few lines is found on sight. One in a long listing has to be
     // traced through it, which is what effort buys.
@@ -213,17 +236,37 @@
      * A transform is left alone: fixing typos in a fee notice is still fixing
      * typos, and pick() moves it off Haiku for that case.
      */
-    const reasoningLed = steps.some((x) => REASONING_LED.includes(x));
+    // Checking figures is a slip to catch. Checking a contract for exposure
+    // is a call to make. Only the first counts as slip-led here.
+    const slipLed = steps.some((x) => REASONING_LED.includes(x) && x !== 'verification')
+      || (steps.includes('verification') && /\b(figures|numbers|totals|calculations|sums|marks)\b/.test(text));
     if (stakes.length) {
-      if (kind === 1 && !reasoningLed) { kind = 2; why.push('stakes lift the model: ' + stakes.join(', ')); }
+      if (kind === 1 && !slipLed) { kind = 2; why.push('stakes lift the model: ' + stakes.join(', ')); }
       else if (kind === 1) { depth = Math.max(depth, 2); depthWhy.push('stakes on a calculation lift the effort: ' + stakes.join(', ')); }
       else why.push('stakes: ' + stakes.join(', '));
     }
+
+    // A check whose miss costs money, a client or trust needs the thinking.
+    const critical = CRITICAL.test(text);
+    if ((stakes.length || critical) && steps.includes('verification')) {
+      depth = Math.max(depth, 2);
+      depthWhy.push('a missed error here would cost');
+    }
+
+    // Work meant to go back and forth gains nothing from long thinking.
+    const shortExplainer = kind === 1 && raw.length < 100 && create.length > 0 && create.every((c) => c === 'explain');
+    const light = kind === 1 && (ITERATIVE.test(text) || shortExplainer);
+    if (light) depthWhy.push('back-and-forth work');
+
+    // Long, hard and critical, handed off: all three, or it is not Extra.
+    const handoff = HANDOFF.test(text) && (critical || stakes.length > 0) && (raw.length > 300 || depth >= 2 || kind === 2);
+    if (handoff) depthWhy.push('a long critical job handed off');
 
     return {
       kind, depth, tokens, why,
       depthWhy: depthWhy.length ? depthWhy : ['no multi-step reasoning found'],
       stakes: stakes.length > 0,
+      light, handoff,
       attachments: extra.attachments || 0,
     };
   }
@@ -357,18 +400,25 @@
    *
    *              depth 0          1                2               3
    *   transform  Haiku 4.5        Sonnet · Low     Sonnet · Medium Sonnet · High
-   *   create     Sonnet · Low     Sonnet · Medium  Sonnet · High   Opus · High
+   *   create     Sonnet · Medium  Sonnet · Medium  Sonnet · High   Opus · High
+   *              (Sonnet · Low for brainstorms, rough drafts and short explainers)
+   *   handed off, long, hard and critical: Opus · Extra
    *   judgment   Opus · Medium    Opus · Medium    Opus · High     Opus · High
    */
   const GRID = [
     [['haiku', null], ['sonnet', 0], ['sonnet', 1], ['sonnet', 2]],
-    [['sonnet', 0], ['sonnet', 1], ['sonnet', 2], ['opus', 2]],
+    [['sonnet', 1], ['sonnet', 1], ['sonnet', 2], ['opus', 2]],
     [['opus', 1], ['opus', 1], ['opus', 2], ['opus', 2]],
   ];
   const NAMES = { haiku: 'Haiku 4.5', sonnet: 'Sonnet 5.5', opus: 'Opus 5.5' };
 
   function pick(a) {
     let [model, effort] = GRID[a.kind][a.depth];
+    // Drafts and brainstorms meant to be reworked: Low.
+    if (a.light && a.depth === 0 && model === 'sonnet') effort = 0;
+    // A long, hard, critical job handed off to run alone: the one place Extra
+    // fits, on the model that weighs best. Max stays off the table.
+    if (a.handoff) { model = 'opus'; effort = 3; }
     // A transform on something the reader must get right goes to a model that
     // makes fewer slips, at the lowest effort.
     if (model === 'haiku' && a.stakes) { model = 'sonnet'; effort = 0; }
@@ -547,7 +597,7 @@
   // Chat mode's step for a prompt: 0 Instant, 1 Medium, 2 High.
   function gptChatTarget(a) {
     const worthRaising = a.depth >= 2 || a.kind === 2;
-    return (a.kind === 0 && a.depth <= 1) ? 0 : worthRaising ? 2 : 1;
+    return ((a.kind === 0 && a.depth <= 1) || (a.light && a.depth === 0)) ? 0 : worthRaising ? 2 : 1;
   }
   function gptChatName(level) {
     const lv = gptLevels();
@@ -592,7 +642,7 @@
       low: 'Low skips thinking for simple tasks where speed matters most, and stretches your usage furthest.',
       medium: 'Medium is the default on Opus 5.5, and on Sonnet 5.5 in the apps. It may skip thinking for simple queries.',
       high: 'High gives deep reasoning on complex tasks. Anthropic calls it the best overall balance of quality and speed.',
-      extra: 'Extra is designed for long-running coding and agentic tasks, not chat.',
+      extra: 'Extra is designed for long-running work, such as a long critical job you hand off and leave to run.',
       max: 'Max is the most thorough and uses your limits fastest. Anthropic reserves it for work where it has measured a gain.',
     },
     chat: {
