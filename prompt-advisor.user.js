@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Prompt Advisor
 // @namespace    local.deepith
-// @version      1.6.0
+// @version      1.6.1
 // @description  Reads the prompt you are typing on claude.ai or chatgpt.com and says which model and effort level it needs, when that differs from what you have picked.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -855,9 +855,30 @@
     if (cardEl) cardEl.classList.remove('cpa-on');
   }
 
+  /*
+   * The site's own windows come first. Settings, usage and account open as a
+   * large dialog over the page, and anything of ours drawn above everything
+   * sat on top of them. A dialog counts when it is big and actually visible;
+   * menus and tooltips are smaller, and a closed one is faded or gone.
+   */
+  function siteDialogOpen() {
+    for (const d of document.querySelectorAll('[role="dialog"], [role="alertdialog"], [aria-modal="true"]')) {
+      if (d.closest('[class*="cpn-"], [class*="cpa-"], [class*="cgu-"]')) continue;
+      const r = d.getBoundingClientRect();
+      if (r.width < 280 || r.height < 200) continue;
+      if (d.checkVisibility && !d.checkVisibility({ opacityProperty: true, visibilityProperty: true })) continue;
+      return true;
+    }
+    return false;
+  }
+
   function place() {
     const b = box();
     if (!b || !hint.classList.contains('cpa-on')) return;
+    // Out of the way of the site's own windows.
+    const covered = siteDialogOpen();
+    hint.style.visibility = covered ? 'hidden' : '';
+    if (covered && cardEl) cardEl.classList.remove('cpa-on');
     const r = card(b).getBoundingClientRect();
     const h = hint.getBoundingClientRect().height || 26;
     hint.style.left = Math.round(r.left) + 'px';

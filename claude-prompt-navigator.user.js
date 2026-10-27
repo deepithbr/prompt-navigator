@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Prompt Navigator
 // @namespace    local.deepith
-// @version      3.14.0
+// @version      3.15.0
 // @description  Lists every question you asked in a Claude chat, first to last, and jumps to them. Reads the full list from Claude's own conversation API, so it is not limited to the handful of messages the page keeps loaded. On Cowork it reads the session event log for the same complete list, and shows the files that session produced.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -145,6 +145,8 @@
    * reaching for it, and it put the open panel back over the scrollbar. Since
    * it no longer sits flush, all four corners are rounded.
    */
+  /* Out of sight while one of Claude's own windows is open over the page. */
+  .cpn-rail.cpn-covered { visibility: hidden; }
   .cpn-rail {
     position: fixed; right: 24px; top: 50%; transform: translateY(-50%);
     z-index: 2147483000;
@@ -1240,6 +1242,10 @@
       if (r.left < PANEL_MIN_REMAINING) continue;
       if (el.querySelector('[data-testid="chat-input"]')) continue;
       if (el.querySelector(MESSAGE_SELECTORS[0])) continue;
+      // Claude closes its Outputs panel by fading it to nothing, and leaves it
+      // in place. Measured on a project chat, a 320px panel at opacity 0 was
+      // pushing the rail a third of the way across an empty right side.
+      if (el.checkVisibility && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) continue;
       if (r.left < edge) edge = r.left;
     }
     return Math.max(0, Math.round(vw - edge));
@@ -1280,9 +1286,29 @@
     return gap;
   }
 
+  /*
+   * The site's own windows come first. Settings, usage and account open as a
+   * large dialog over the page, and anything of ours drawn above everything
+   * sat on top of them. A dialog counts when it is big and actually visible;
+   * menus and tooltips are smaller, and a closed one is faded or gone.
+   */
+  function siteDialogOpen() {
+    for (const d of document.querySelectorAll('[role="dialog"], [role="alertdialog"], [aria-modal="true"]')) {
+      if (d.closest('[class*="cpn-"], [class*="cpa-"], [class*="cgu-"]')) continue;
+      const r = d.getBoundingClientRect();
+      if (r.width < 280 || r.height < 200) continue;
+      if (d.checkVisibility && !d.checkVisibility({ opacityProperty: true, visibilityProperty: true })) continue;
+      return true;
+    }
+    return false;
+  }
+
   let lastOffset = -1;
   function syncRailOffset() {
     if (!rail || !document.body.contains(rail)) return;
+    const covered = siteDialogOpen();
+    rail.classList.toggle('cpn-covered', covered);
+    if (covered && peek) hidePeek();
     const raw = panelOffset();
     // A few pixels of air so the ticks do not touch the panel edge.
     const offset = raw > 0 ? raw + 6 : edgeGap();
@@ -3322,6 +3348,10 @@
       const r = route();
       if (r && r.mode === 'cowork') refreshCoworkContext(r.id);
     }, 45000);
+
+    // Settings opening is checked on a short clock too, so the rail never
+    // lingers over it waiting for a page change.
+    setInterval(() => { if (rail) syncRailOffset(); }, 500);
 
     // Plan usage moves on its own, independently of anything you do here.
     setInterval(async () => { await fetchUsage(); renderMeters(); }, 60000);

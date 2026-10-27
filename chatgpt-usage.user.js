@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Usage Meter
 // @namespace    local.deepith
-// @version      1.4.0
+// @version      1.4.1
 // @description  Shows your ChatGPT plan usage as a bar with a window-elapsed marker, the same reading as the Claude Prompt Navigator header. Companion script — ChatGPT is a different origin, so this cannot live inside the claude.ai one.
 // @author       deepith
 // @copyright    2026 Deepith Kundar. All rights reserved. Personal use only —
@@ -416,9 +416,26 @@
   }
 
   let lastHidden = null;
+  /*
+   * The site's own windows come first. Settings, usage and account open as a
+   * large dialog over the page, and anything of ours drawn above everything
+   * sat on top of them. A dialog counts when it is big and actually visible;
+   * menus and tooltips are smaller, and a closed one is faded or gone.
+   */
+  function siteDialogOpen() {
+    for (const d of document.querySelectorAll('[role="dialog"], [role="alertdialog"], [aria-modal="true"]')) {
+      if (d.closest('[class*="cpn-"], [class*="cpa-"], [class*="cgu-"]')) continue;
+      const r = d.getBoundingClientRect();
+      if (r.width < 280 || r.height < 200) continue;
+      if (d.checkVisibility && !d.checkVisibility({ opacityProperty: true, visibilityProperty: true })) continue;
+      return true;
+    }
+    return false;
+  }
+
   function syncVisibility() {
     if (!pill) return;
-    const hide = overlapsPopup();
+    const hide = overlapsPopup() || siteDialogOpen();
     if (hide === lastHidden) return;
     lastHidden = hide;
     pill.classList.toggle('cgu-hidden', hide);
