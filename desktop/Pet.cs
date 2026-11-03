@@ -35,7 +35,6 @@ public class PetForm : Form
     static readonly Color Skin = Color.FromArgb(226, 184, 148);
     static readonly Color Hair = Color.FromArgb(28, 24, 32);
     static readonly Color Scarf = Color.FromArgb(178, 36, 40);
-    static readonly Color ScarfDark = Color.FromArgb(142, 26, 32);
     static readonly Color Mark = Color.FromArgb(150, 40, 44);
     static readonly Color Ink = Color.FromArgb(18, 16, 22);
     static readonly Color Blue = Color.FromArgb(91, 157, 187);
@@ -343,7 +342,7 @@ public class PetForm : Form
         {
             line.LineJoin = LineJoin.Round;
 
-            // The topknot's tail and the scarf's ends stream out behind him.
+            // The topknot's tail streams out behind him.
             float sway = (float)Math.Sin(t * (1.5 + 5 * wind)) * 3 * wind;
             using (Pen tail = new Pen(Hair, 3.2f))
             {
@@ -351,9 +350,6 @@ public class PetForm : Form
                 g.DrawBezier(tail, 6, -106, 16, -110 + sway, 24, -104 - sway, 32, -100 + sway);
                 g.DrawBezier(tail, 6, -104, 14, -104 - sway, 20, -96 + sway, 27, -92 - sway);
             }
-            PointF[] ribbon = Ribbon(t, wind, 14, -20);
-            using (SolidBrush b = new SolidBrush(ScarfDark)) g.FillPolygon(b, ribbon);
-            g.DrawPolygon(line, ribbon);
 
             // Neck.
             g.FillRectangle(skin, -9, -40, 18, 22);
@@ -496,22 +492,6 @@ public class PetForm : Form
         g.DrawLine(p, 12, -54, 14, -47);
         g.DrawLine(p, 8.5f, -54, 10.5f, -47);
         g.DrawLine(p, 0, -80, 0, -75);
-    }
-
-    // A strip of cloth trailing from (x, y), rippling harder in a stronger wind.
-    static PointF[] Ribbon(double t, float wind, float x0, float y0)
-    {
-        const int n = 9;
-        PointF[] pts = new PointF[n * 2];
-        for (int i = 0; i < n; i++)
-        {
-            float x = x0 + i * 4.4f;
-            float y = y0 + i * (1.8f - wind * 1.1f) + (float)Math.Sin(t * (2 + 6 * wind) - i * 0.9) * i * 0.5f * (0.4f + wind);
-            float half = 3.2f - i * 0.22f;
-            pts[i] = new PointF(x, y - half);
-            pts[n * 2 - 1 - i] = new PointF(x, y + half);
-        }
-        return pts;
     }
 
     // Short bolts that jump around him, a new set every eighth of a second.
