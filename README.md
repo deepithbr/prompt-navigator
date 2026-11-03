@@ -78,9 +78,11 @@ Left-click the tray icon for one list of every Claude and ChatGPT task on the PC
 
 | Source | How it reports |
 |---|---|
-| Claude Code, desktop app and terminal | Three hooks in `~/.claude/settings.json`: a prompt starting, Claude stopping, and a permission request. Every session, with its first prompt as the title |
-| Claude and ChatGPT in Brave | The extension's `task-reporter.js` sees the site's Stop button appear and go, and its background script passes that to the board |
-| Claude app (Chat and Cowork) and ChatGPT app (Chat, Work, Codex) | The board watches each app's Stop button. Only the conversation on screen, and without its title, which the apps do not expose |
+| Claude Code, desktop app and terminal | Three hooks in `~/.claude/settings.json`: a prompt starting, Claude stopping, and a permission request. Every session, titled with what you last typed and the project folder beside it |
+| Claude and ChatGPT in Brave | The extension's `task-reporter.js` sees the site's Stop button appear and go, and its background script passes that to the board. The tray menu's **Open ChatGPT in a tracked window** opens ChatGPT in its own Brave window, no tabs or address bar, where this keeps working while the window is minimized |
+| Claude app (Chat and Cowork) | The board watches the app's Stop button while the window is in sight, titled with the open chat's name. A chat that finishes while the window is minimized or covered is caught from the Windows notification Claude posts for it, so Claude's notifications must stay on |
+| ChatGPT app, Codex and Work | Read from the session files Codex writes under `~/.codex/sessions` as a run starts and ends, minimized or not, titled with the thread's name |
+| ChatGPT app, Chat | The board watches the Stop button while the window is in sight. A chat whose window goes out of sight is marked hidden, because the app freezes its screen and posts no notification for chats; use the tracked window above for long ones |
 
 The hooks, each set to run in the background so it can never hold up a prompt:
 

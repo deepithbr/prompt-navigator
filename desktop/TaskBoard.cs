@@ -435,6 +435,7 @@ public class TaskBoard
         while (running)
         {
             try { WatchOne("claude", "Claude app"); } catch { }
+            try { ScanClaudeToasts(); } catch (Exception e) { Log("claude toasts: " + e.Message); }
             // Codex before ChatGPT, so a Codex or Work run the files already
             // know about is not listed a second time from the app's screen.
             try { ScanCodex(); } catch (Exception e) { Log("codex watch: " + e.Message); }
@@ -523,6 +524,7 @@ public class TaskBoard
             // the name is read again at the end. Quiet when you are already
             // looking at that app.
             if (w.Key != null) Upsert(w.Key, label, chat.Length > 0 ? chat : null, "done", "", app, InFront(proc));
+            if (proc == "claude") claudeSeenDone = DateTime.Now;
         }
     }
 
@@ -708,6 +710,102 @@ public class TaskBoard
         }
         catch { }
         return fo.Label + " · started " + fo.StartedAt.ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    /* -------------------------------------------------------------- *
+     * Claude app chats that finish out of sight. The app's screen
+     * freezes while its window is minimized or covered, but it still
+     * posts a Windows notification named after the chat, and Windows
+     * keeps those in wpndatabase.db. That is read with winsqlite3.dll,
+     * the SQLite that ships inside Windows, read-only.
+     * -------------------------------------------------------------- */
+
+    static class Sqlite
+    {
+        [DllImport("winsqlite3.dll")] public static extern int sqlite3_open_v2(byte[] file, out IntPtr db, int flags, IntPtr vfs);
+        [DllImport("winsqlite3.dll")] public static extern int sqlite3_busy_timeout(IntPtr db, int ms);
+        [DllImport("winsqlite3.dll")] public static extern int sqlite3_prepare_v2(IntPtr db, byte[] sql, int bytes, out IntPtr stmt, IntPtr tail);
+        [DllImport("winsqlite3.dll")] public static extern int sqlite3_step(IntPtr stmt);
+        [DllImport("winsqlite3.dll")] public static extern long sqlite3_column_int64(IntPtr stmt, int col);
+        [DllImport("winsqlite3.dll")] public static extern IntPtr sqlite3_column_blob(IntPtr stmt, int col);
+        [DllImport("winsqlite3.dll")] public static extern int sqlite3_column_bytes(IntPtr stmt, int col);
+        [DllImport("winsqlite3.dll")] public static extern int sqlite3_finalize(IntPtr stmt);
+        [DllImport("winsqlite3.dll")] public static extern int sqlite3_close(IntPtr db);
+
+        static byte[] Z(string s) { return Encoding.UTF8.GetBytes(s + "\0"); }
+
+        // Each row's first column as a number and second as text.
+        public static List<KeyValuePair<long, string>> Rows(string file, string sql)
+        {
+            List<KeyValuePair<long, string>> rows = new List<KeyValuePair<long, string>>();
+            IntPtr db, stmt;
+            if (sqlite3_open_v2(Z(file), out db, 1 /* SQLITE_OPEN_READONLY */, IntPtr.Zero) != 0)
+            {
+                sqlite3_close(db);
+                throw new IOException("could not open " + file);
+            }
+            try
+            {
+                sqlite3_busy_timeout(db, 1000);
+                if (sqlite3_prepare_v2(db, Z(sql), -1, out stmt, IntPtr.Zero) != 0) throw new IOException("bad query");
+                try
+                {
+                    while (sqlite3_step(stmt) == 100 /* SQLITE_ROW */)
+                    {
+                        int n = sqlite3_column_bytes(stmt, 1);
+                        byte[] b = new byte[n];
+                        if (n > 0) Marshal.Copy(sqlite3_column_blob(stmt, 1), b, 0, n);
+                        rows.Add(new KeyValuePair<long, string>(sqlite3_column_int64(stmt, 0), Encoding.UTF8.GetString(b)));
+                    }
+                }
+                finally { sqlite3_finalize(stmt); }
+            }
+            finally { sqlite3_close(db); }
+            return rows;
+        }
+    }
+
+    long toastSeen = -1;
+    DateTime claudeSeenDone = DateTime.MinValue;
+    static readonly Regex ToastText = new Regex("<text[^>]*>([^<]*)</text>");
+
+    void ScanClaudeToasts()
+    {
+        string db = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            @"Microsoft\Windows\Notifications\wpndatabase.db");
+        if (!File.Exists(db)) return;
+        List<KeyValuePair<long, string>> rows = Sqlite.Rows(db,
+            "select n.Id, n.Payload from Notification n join NotificationHandler h on h.RecordId = n.HandlerId " +
+            "where h.PrimaryId like 'Claude%!Claude' and n.Type = 'toast' and n.Id > " + Math.Max(0, toastSeen) + " order by n.Id");
+
+        // First pass after a start: what is already there is not news.
+        bool primed = toastSeen >= 0;
+        foreach (KeyValuePair<long, string> r in rows) toastSeen = Math.Max(toastSeen, r.Key);
+        if (toastSeen < 0) toastSeen = 0;
+        if (!primed) return;
+
+        foreach (KeyValuePair<long, string> r in rows)
+        {
+            // A Code session's notification carries a header naming the
+            // session; its hooks already reported it, with your prompt.
+            if (r.Value.Contains("<header id=\"session-")) continue;
+            Match m = ToastText.Match(r.Value);
+            string title = m.Success ? Short(WebUtility.HtmlDecode(m.Groups[1].Value), 70) : "";
+            if (title.Length == 0) title = "Claude app · chat";
+
+            // The screen watcher may have seen this run start, or already
+            // seen it end in front of you.
+            AppWatch w;
+            string key = "toast:claude:" + r.Key;
+            if (watches.TryGetValue("claude", out w) && w.Running && w.Key != null)
+            {
+                key = w.Key;
+                w.Running = false;
+                w.Blind = false;
+            }
+            else if ((DateTime.Now - claudeSeenDone).TotalSeconds < 30) continue;
+            Upsert(key, "Claude app", title, "done", "", "claude", InFront("claude"));
+        }
     }
 
     // What you typed, without what the Claude desktop app wraps around it:
