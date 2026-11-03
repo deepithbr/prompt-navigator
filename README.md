@@ -74,7 +74,7 @@ It gives prompt-level advice only. Follow-ups, thread length and the new-chat su
 
 **One task board for everything**
 
-Left-click the tray icon for one list of every Claude and ChatGPT task on the PC: working, done, or waiting for you, with a Windows notification when a task finishes or needs you. Double-click a task to bring its app forward.
+Left-click the tray icon for one list of every Claude and ChatGPT task on the PC: working, done, or waiting for you, with a Windows notification when a task finishes or needs you. The list opens as a flyout above the tray, grouped into needs you, working and earlier, with a turning spinner on anything still running. Click a task to bring its app forward; click anywhere else or press Esc to close it.
 
 | Source | How it reports |
 |---|---|

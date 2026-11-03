@@ -20,6 +20,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -488,81 +489,404 @@ public class TaskBoard
 }
 
 /* ---------------------------------------------------------------------- *
- * The list
+ * The list: a borderless flyout above the tray, drawn by hand so it can
+ * group tasks by what they need from you, turn a live spinner for the ones
+ * running, and open a task on a single click. It hides when you click
+ * anywhere else, like Windows' own tray flyouts.
  * ---------------------------------------------------------------------- */
 
 public class BoardForm : Form
 {
+    static readonly Color Bg = Color.FromArgb(24, 24, 27);
+    static readonly Color Hover = Color.FromArgb(38, 38, 43);
+    static readonly Color Line = Color.FromArgb(46, 46, 52);
+    static readonly Color Ink = Color.FromArgb(236, 234, 229);
+    static readonly Color Muted = Color.FromArgb(150, 147, 141);
+    static readonly Color Faint = Color.FromArgb(108, 106, 101);
+    static readonly Color Blue = Color.FromArgb(91, 157, 187);
+    static readonly Color Green = Color.FromArgb(127, 163, 127);
+    static readonly Color Orange = Color.FromArgb(217, 119, 87);
+
+    // Layout in pixels at 100% scaling.
+    const int Wd = 400, Ht = 500, Head = 76, Foot = 48, RowH = 58, SecH = 32;
+
+    [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int attr, ref int value, int size);
+
     readonly TaskBoard board;
-    readonly ListView list = new ListView();
+    readonly System.Windows.Forms.Timer tick = new System.Windows.Forms.Timer();
+    readonly Stopwatch clock = Stopwatch.StartNew();
+    readonly Font title = new Font("Segoe UI Semibold", 13f, GraphicsUnit.Point);
+    readonly Font sub = new Font("Segoe UI", 9f, GraphicsUnit.Point);
+    readonly Font name = new Font("Segoe UI", 10f, GraphicsUnit.Point);
+    readonly Font meta = new Font("Segoe UI", 8.5f, GraphicsUnit.Point);
+    readonly Font label = new Font("Segoe UI Semibold", 8.5f, GraphicsUnit.Point);
+
+    List<TaskItem> items = new List<TaskItem>();
+    readonly List<RectangleF> rowRects = new List<RectangleF>();
+    readonly List<TaskItem> rowItems = new List<TaskItem>();
+    readonly List<KeyValuePair<float, string>> sections = new List<KeyValuePair<float, string>>();
+    float scale = 1f, scroll, contentH;
+    int hover = -1;
+    bool overClose, overClear;
+    int ticks;
 
     public BoardForm(TaskBoard board)
     {
         this.board = board;
-        Text = "Prompt Advisor \u00B7 Tasks";
-        Width = 720; Height = 420;
+        Text = "Prompt Advisor · Tasks";
+        FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.Manual;
-        Rectangle wa = Screen.PrimaryScreen.WorkingArea;
-        Location = new Point(wa.Right - Width - 16, wa.Bottom - Height - 16);
+        ShowInTaskbar = false;
         TopMost = true;
-        ShowInTaskbar = true;
-        BackColor = Color.FromArgb(32, 31, 30);
+        KeyPreview = true;
+        BackColor = Bg;
+        DoubleBuffered = true;
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
 
-        list.Dock = DockStyle.Fill;
-        list.View = View.Details;
-        list.FullRowSelect = true;
-        list.HeaderStyle = ColumnHeaderStyle.Nonclickable;
-        list.BackColor = Color.FromArgb(32, 31, 30);
-        list.ForeColor = Color.FromArgb(230, 228, 223);
-        list.BorderStyle = BorderStyle.None;
-        list.Font = new Font("Segoe UI", 10f);
-        list.Columns.Add("", 110);
-        list.Columns.Add("Where", 160);
-        list.Columns.Add("Task", 320);
-        list.Columns.Add("When", 100);
-        list.DoubleClick += delegate { if (list.SelectedItems.Count > 0) board.Open((TaskItem)list.SelectedItems[0].Tag); };
+        tick.Interval = 50;
+        tick.Tick += delegate
+        {
+            // The spinner turns every frame; times like "4 min ago" move every few seconds.
+            ticks++;
+            if (Opacity < 1) Opacity = Math.Min(1, Opacity + 0.2);
+            if (items.Exists(delegate (TaskItem it) { return it.State == "working"; }) || ticks % 100 == 0) Invalidate();
+        };
 
-        Panel bar = new Panel();
-        bar.Dock = DockStyle.Bottom; bar.Height = 36;
-        bar.BackColor = Color.FromArgb(38, 37, 36);
-        Button clear = new Button();
-        clear.Text = "Clear finished";
-        clear.FlatStyle = FlatStyle.Flat;
-        clear.ForeColor = Color.FromArgb(230, 228, 223);
-        clear.SetBounds(8, 5, 120, 26);
-        clear.Click += delegate { board.ClearFinished(); };
-        Label hint = new Label();
-        hint.Text = "Double-click a task to bring its app forward.";
-        hint.ForeColor = Color.FromArgb(150, 147, 141);
-        hint.AutoSize = true;
-        hint.Location = new Point(140, 10);
-        bar.Controls.Add(clear);
-        bar.Controls.Add(hint);
-
-        Controls.Add(list);
-        Controls.Add(bar);
+        Deactivate += delegate { Hide(); };
         FormClosing += delegate (object s, FormClosingEventArgs e) { if (e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); } };
     }
 
-    public void Fill(List<TaskItem> items)
+    protected override CreateParams CreateParams
     {
-        list.BeginUpdate();
-        list.Items.Clear();
+        get
+        {
+            CreateParams cp = base.CreateParams;
+            cp.ClassStyle |= 0x20000; // CS_DROPSHADOW
+            return cp;
+        }
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        // Windows 11: rounded corners and a hairline border in the list's own
+        // colour. Earlier Windows ignores both and keeps square corners.
+        try
+        {
+            int round = 2;
+            DwmSetWindowAttribute(Handle, 33, ref round, 4);
+            int border = Line.R | (Line.G << 8) | (Line.B << 16);
+            DwmSetWindowAttribute(Handle, 34, ref border, 4);
+        }
+        catch { }
+    }
+
+    protected override void OnVisibleChanged(EventArgs e)
+    {
+        base.OnVisibleChanged(e);
+        if (!Visible) { tick.Enabled = false; return; }
+        try { scale = Math.Max(1f, Native.GetDpiForWindow(Handle) / 96f); } catch { scale = 1f; }
+        Size = new Size((int)(Wd * scale), (int)(Ht * scale));
+        // Above the tray and clear of the desk pet, which sits in the corner.
+        Rectangle wa = Screen.FromPoint(Cursor.Position).WorkingArea;
+        Location = new Point(wa.Right - Width - (int)(12 * scale), Math.Max(wa.Top + 12, wa.Bottom - Height - (int)(206 * scale)));
+        scroll = 0;
+        hover = -1;
+        Opacity = 0.2;
+        tick.Enabled = true;
+    }
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys keys)
+    {
+        if (keys == Keys.Escape) { Hide(); return true; }
+        return base.ProcessCmdKey(ref msg, keys);
+    }
+
+    public void Fill(List<TaskItem> list)
+    {
+        items = list;
+        Arrange();
+        Invalidate();
+    }
+
+    // Needs you first, then what is running, then everything that ended.
+    void Arrange()
+    {
+        rowRects.Clear(); rowItems.Clear(); sections.Clear();
+        float y = 8;
+        string[][] groups =
+        {
+            new[] { "Needs you", "needs" },
+            new[] { "Working", "working" },
+            new[] { "Earlier", "done", "lost" }
+        };
+        foreach (string[] grp in groups)
+        {
+            List<TaskItem> these = items.FindAll(delegate (TaskItem it) { return Array.IndexOf(grp, it.State, 1) > 0; });
+            if (these.Count == 0) continue;
+            sections.Add(new KeyValuePair<float, string>(y, grp[0] + "  ·  " + these.Count));
+            y += SecH;
+            foreach (TaskItem it in these)
+            {
+                rowRects.Add(new RectangleF(8, y, Wd - 16, RowH - 4));
+                rowItems.Add(it);
+                y += RowH;
+            }
+            y += 4;
+        }
+        contentH = y;
+        scroll = Math.Max(0, Math.Min(scroll, MaxScroll()));
+    }
+
+    float ViewH { get { return Ht - Head - Foot; } }
+    float MaxScroll() { return Math.Max(0, contentH - ViewH); }
+
+    /* -------------------------------------------------------------- *
+     * Drawing
+     * -------------------------------------------------------------- */
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        Graphics g = e.Graphics;
+        g.Clear(Bg);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        g.ScaleTransform(scale, scale);
+
+        DrawHeader(g);
+
+        GraphicsState saved = g.Save();
+        g.SetClip(new RectangleF(0, Head, Wd, ViewH));
+        g.TranslateTransform(0, Head - scroll);
+        if (rowItems.Count == 0) DrawEmpty(g);
+        else DrawRows(g);
+        g.Restore(saved);
+
+        if (MaxScroll() > 0)
+        {
+            float track = ViewH - 16, thumb = Math.Max(28, track * ViewH / contentH);
+            float at = Head + 8 + (track - thumb) * scroll / MaxScroll();
+            using (SolidBrush b = new SolidBrush(Line))
+            using (GraphicsPath p = Pill(new RectangleF(Wd - 7, at, 3.5f, thumb)))
+                g.FillPath(b, p);
+        }
+
+        DrawFooter(g);
+    }
+
+    void DrawHeader(Graphics g)
+    {
+        using (SolidBrush b = new SolidBrush(Ink)) g.DrawString("Tasks", title, b, 18, 16);
+
+        int needs = 0, run = 0, done = 0;
         foreach (TaskItem it in items)
         {
-            string state = it.State == "working" ? "\u25CF  Working" : it.State == "done" ? "\u2713  Done"
-                : it.State == "needs" ? "!  Needs you" : "?  Stopped reporting";
-            DateTime when = it.State == "working" ? it.Started : it.Updated;
-            System.Globalization.CultureInfo inv = System.Globalization.CultureInfo.InvariantCulture;
-            string time = when.Date == DateTime.Today ? when.ToString("HH:mm", inv) : when.ToString("d MMM HH:mm", inv);
-            if (it.State == "working") time = Math.Max(1, (int)(DateTime.Now - it.Started).TotalMinutes) + " min";
-            ListViewItem row = new ListViewItem(new[] { state, it.Source, it.Title, time });
-            row.Tag = it;
-            row.ForeColor = it.State == "working" ? Color.FromArgb(91, 157, 187)
-                : it.State == "needs" ? Color.FromArgb(217, 119, 87)
-                : it.State == "done" ? Color.FromArgb(127, 163, 127) : Color.FromArgb(150, 147, 141);
-            list.Items.Add(row);
+            if (it.State == "needs") needs++;
+            else if (it.State == "working") run++;
+            else if (it.State == "done" && it.Updated.Date == DateTime.Today) done++;
         }
-        list.EndUpdate();
+        List<string> parts = new List<string>();
+        if (needs > 0) parts.Add(needs + " need" + (needs == 1 ? "s" : "") + " you");
+        if (run > 0) parts.Add(run + " working");
+        parts.Add(done + " done today");
+        using (SolidBrush b = new SolidBrush(Muted)) g.DrawString(string.Join("  ·  ", parts.ToArray()), sub, b, 19, 44);
+
+        RectangleF x = CloseRect();
+        if (overClose) using (SolidBrush b = new SolidBrush(Hover)) g.FillEllipse(b, x);
+        using (Pen p = new Pen(overClose ? Ink : Muted, 1.4f))
+        {
+            float c = x.X + x.Width / 2, m = x.Y + x.Height / 2;
+            g.DrawLine(p, c - 4.5f, m - 4.5f, c + 4.5f, m + 4.5f);
+            g.DrawLine(p, c + 4.5f, m - 4.5f, c - 4.5f, m + 4.5f);
+        }
+        using (Pen p = new Pen(Line, 1f)) g.DrawLine(p, 0, Head - 0.5f, Wd, Head - 0.5f);
+    }
+
+    void DrawRows(Graphics g)
+    {
+        using (SolidBrush b = new SolidBrush(Faint))
+            foreach (KeyValuePair<float, string> s in sections)
+                g.DrawString(s.Value, label, b, 18, s.Key + 10);
+
+        StringFormat cut = new StringFormat(StringFormatFlags.NoWrap);
+        cut.Trimming = StringTrimming.EllipsisCharacter;
+        StringFormat right = new StringFormat(StringFormatFlags.NoWrap);
+        right.Alignment = StringAlignment.Far;
+
+        for (int i = 0; i < rowItems.Count; i++)
+        {
+            RectangleF r = rowRects[i];
+            if (r.Bottom < scroll || r.Top > scroll + ViewH) continue;
+            TaskItem it = rowItems[i];
+            if (i == hover)
+                using (SolidBrush b = new SolidBrush(Hover))
+                using (GraphicsPath p = Rounded(r, 8))
+                    g.FillPath(b, p);
+
+            DrawState(g, it.State, r.X + 22, r.Y + r.Height / 2);
+
+            float tx = r.X + 44, tw = r.Width - 44 - 78;
+            using (SolidBrush b = new SolidBrush(it.State == "lost" ? Muted : Ink))
+                g.DrawString(it.Title ?? "", name, b, new RectangleF(tx, r.Y + 8, tw + 60, 20), cut);
+            using (SolidBrush b = new SolidBrush(Muted))
+                g.DrawString(it.Source ?? "", meta, b, new RectangleF(tx, r.Y + 29, tw, 18), cut);
+            using (SolidBrush b = new SolidBrush(it.State == "needs" ? Orange : Faint))
+                g.DrawString(When(it), meta, b, new RectangleF(r.Right - 110, r.Y + 29, 100, 18), right);
+        }
+    }
+
+    // The mark at the left of each row: a turning arc while it runs, a tick
+    // when done, an exclamation when it needs you, a dash when it went quiet.
+    void DrawState(Graphics g, string state, float cx, float cy)
+    {
+        RectangleF disc = new RectangleF(cx - 11, cy - 11, 22, 22);
+        if (state == "working")
+        {
+            using (Pen track = new Pen(Color.FromArgb(60, Blue), 2.2f)) g.DrawEllipse(track, cx - 8, cy - 8, 16, 16);
+            using (Pen arc = new Pen(Blue, 2.2f))
+            {
+                arc.StartCap = arc.EndCap = LineCap.Round;
+                g.DrawArc(arc, cx - 8, cy - 8, 16, 16, (float)(clock.Elapsed.TotalSeconds * 300 % 360), 100);
+            }
+            return;
+        }
+        Color c = state == "done" ? Green : state == "needs" ? Orange : Faint;
+        using (SolidBrush b = new SolidBrush(Color.FromArgb(state == "lost" ? 0 : 46, c))) g.FillEllipse(b, disc);
+        using (Pen p = new Pen(c, 1.8f))
+        {
+            p.StartCap = p.EndCap = LineCap.Round;
+            p.LineJoin = LineJoin.Round;
+            if (state == "done")
+                g.DrawLines(p, new PointF[] { new PointF(cx - 4.5f, cy + 0.2f), new PointF(cx - 1.2f, cy + 3.5f), new PointF(cx + 5, cy - 3.5f) });
+            else if (state == "needs")
+            {
+                g.DrawLine(p, cx, cy - 5, cx, cy + 1);
+                using (SolidBrush b = new SolidBrush(c)) g.FillEllipse(b, cx - 1.2f, cy + 3.2f, 2.4f, 2.4f);
+            }
+            else
+            {
+                g.DrawEllipse(p, disc.X + 1, disc.Y + 1, disc.Width - 2, disc.Height - 2);
+                g.DrawLine(p, cx - 4, cy, cx + 4, cy);
+            }
+        }
+    }
+
+    void DrawEmpty(Graphics g)
+    {
+        float cy = ViewH / 2 - 24;
+        using (Pen p = new Pen(Line, 2f)) g.DrawEllipse(p, Wd / 2f - 16, cy - 16, 32, 32);
+        using (Pen p = new Pen(Faint, 2f)) g.DrawLine(p, Wd / 2f - 6, cy, Wd / 2f + 6, cy);
+        StringFormat mid = new StringFormat();
+        mid.Alignment = StringAlignment.Center;
+        using (SolidBrush b = new SolidBrush(Ink)) g.DrawString("No tasks yet", name, b, new RectangleF(0, cy + 28, Wd, 22), mid);
+        using (SolidBrush b = new SolidBrush(Muted))
+            g.DrawString("Tasks from Claude Code, the Claude and ChatGPT apps,\nand Claude or ChatGPT in Brave show up here.", meta, b, new RectangleF(24, cy + 52, Wd - 48, 40), mid);
+    }
+
+    void DrawFooter(Graphics g)
+    {
+        float y = Ht - Foot;
+        using (Pen p = new Pen(Line, 1f)) g.DrawLine(p, 0, y + 0.5f, Wd, y + 0.5f);
+        bool any = items.Exists(delegate (TaskItem it) { return it.State != "working" && it.State != "needs"; });
+        RectangleF c = ClearRect();
+        if (any && overClear)
+            using (SolidBrush b = new SolidBrush(Hover))
+            using (GraphicsPath p = Rounded(c, 6))
+                g.FillPath(b, p);
+        using (SolidBrush b = new SolidBrush(any ? (overClear ? Ink : Muted) : Faint))
+            g.DrawString("Clear finished", sub, b, c.X + 8, c.Y + 5);
+        StringFormat right = new StringFormat();
+        right.Alignment = StringAlignment.Far;
+        using (SolidBrush b = new SolidBrush(Faint))
+            g.DrawString("Click a task to open its app", meta, b, new RectangleF(0, y + 16, Wd - 18, 18), right);
+    }
+
+    string When(TaskItem it)
+    {
+        System.Globalization.CultureInfo inv = System.Globalization.CultureInfo.InvariantCulture;
+        if (it.State == "working")
+        {
+            int m = (int)(DateTime.Now - it.Started).TotalMinutes;
+            return m < 1 ? "Started just now" : "Running " + m + " min";
+        }
+        TimeSpan ago = DateTime.Now - it.Updated;
+        if (ago.TotalMinutes < 1) return "Just now";
+        if (ago.TotalMinutes < 60) return (int)ago.TotalMinutes + " min ago";
+        if (it.Updated.Date == DateTime.Today) return it.Updated.ToString("HH:mm", inv);
+        if (it.Updated.Date == DateTime.Today.AddDays(-1)) return "Yesterday";
+        return it.Updated.ToString("d MMM", inv);
+    }
+
+    RectangleF CloseRect() { return new RectangleF(Wd - 46, 18, 28, 28); }
+    RectangleF ClearRect() { return new RectangleF(10, Ht - Foot + 10, 110, 28); }
+
+    static GraphicsPath Rounded(RectangleF r, float rad)
+    {
+        GraphicsPath p = new GraphicsPath();
+        float d = rad * 2;
+        p.AddArc(r.X, r.Y, d, d, 180, 90);
+        p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+        p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+        p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+        p.CloseFigure();
+        return p;
+    }
+
+    static GraphicsPath Pill(RectangleF r) { return Rounded(r, r.Width / 2); }
+
+    /* -------------------------------------------------------------- *
+     * Mouse
+     * -------------------------------------------------------------- */
+
+    PointF Logical(Point p) { return new PointF(p.X / scale, p.Y / scale); }
+
+    int RowAt(PointF p)
+    {
+        if (p.Y < Head || p.Y > Ht - Foot) return -1;
+        PointF q = new PointF(p.X, p.Y - Head + scroll);
+        for (int i = 0; i < rowRects.Count; i++) if (rowRects[i].Contains(q)) return i;
+        return -1;
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        PointF p = Logical(e.Location);
+        int h = RowAt(p);
+        bool c = CloseRect().Contains(p), k = ClearRect().Contains(p);
+        if (h != hover || c != overClose || k != overClear)
+        {
+            hover = h; overClose = c; overClear = k;
+            Cursor = h >= 0 || c || k ? Cursors.Hand : Cursors.Default;
+            Invalidate();
+        }
+    }
+
+    protected override void OnMouseLeave(EventArgs e)
+    {
+        base.OnMouseLeave(e);
+        hover = -1; overClose = overClear = false;
+        Invalidate();
+    }
+
+    protected override void OnMouseClick(MouseEventArgs e)
+    {
+        base.OnMouseClick(e);
+        if (e.Button != MouseButtons.Left) return;
+        PointF p = Logical(e.Location);
+        if (CloseRect().Contains(p)) { Hide(); return; }
+        if (ClearRect().Contains(p)) { board.ClearFinished(); return; }
+        int i = RowAt(p);
+        if (i < 0) return;
+        Hide();
+        board.Open(rowItems[i]);
+    }
+
+    protected override void OnMouseWheel(MouseEventArgs e)
+    {
+        base.OnMouseWheel(e);
+        scroll = Math.Max(0, Math.Min(MaxScroll(), scroll - e.Delta / 120f * RowH));
+        hover = RowAt(Logical(e.Location));
+        Invalidate();
     }
 }
