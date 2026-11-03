@@ -59,7 +59,7 @@ chrome.runtime.onInstalled.addListener(pollClaude);
 async function claudeOrg() {
   const kept = await chrome.storage.session.get('org');
   if (kept.org) return kept.org;
-  const r = await fetch(`${CLAUDE}/api/organizations`, { headers: JSON_ONLY, credentials: 'include' });
+  const r = await fetch(`${CLAUDE}/api/organizations`, { headers: JSON_ONLY, credentials: 'include', signal: AbortSignal.timeout(10000) });
   if (!r.ok) return null;
   const orgs = await r.json();
   const org = ((orgs || []).find((o) => (o.capabilities || []).includes('chat')) || (orgs || [])[0] || {}).uuid;
@@ -67,10 +67,15 @@ async function claudeOrg() {
   return org || null;
 }
 
+// While a run is going, a second look 15 seconds after each alarm halves
+// the wait for its finish; an alarm cannot fire more often than every 30.
+const BUSY_RECHECK_MS = 15000;
+
 let polling = false;
 async function pollClaude() {
   if (polling) return;
   polling = true;
+  let again = false;
   try {
     const state = await claudeState();
     if (!state) return;
@@ -83,7 +88,8 @@ async function pollClaude() {
     const org = await claudeOrg();
     if (!org) return;
     const r = await fetch(`${CLAUDE}/api/organizations/${org}/chat_conversations?limit=10`,
-      { headers: JSON_ONLY, credentials: 'include' });
+      { headers: JSON_ONLY, credentials: 'include', signal: AbortSignal.timeout(10000) });
+    again = state.busy;
     // Signed out, or switched account: find the organisation again next time.
     if (r.status === 401 || r.status === 403) { await chrome.storage.session.remove('org'); return; }
     if (!r.ok) return;
@@ -94,6 +100,7 @@ async function pollClaude() {
   } finally {
     polling = false;
   }
+  if (again) setTimeout(pollClaude, BUSY_RECHECK_MS);
 }
 
 /*
