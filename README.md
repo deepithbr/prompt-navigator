@@ -112,7 +112,7 @@ An energy core sits in the bottom-right corner of the screen, above the taskbar,
 | A gold burst of rings, then a steady gold glow, and a green bubble naming the task | A task finished while you were in another app |
 | A red pulse with rings rolling outward and an orange bubble | A task needs your approval or answer |
 
-The bubble stays until you click the core, which brings that task's app forward. Clicking it with no bubble opens the task list. A task that finishes in the app you are already looking at gets a four-second burst and no sound, so a Code session in front of you does not nag. Drag it anywhere; it keeps the spot. Right-click for **Tasks**, **Dismiss**, **Sound** and **Hide until the next task**.
+The bubble stays until you click the core, which brings that task's app forward. Clicking it with no bubble opens the task list. A task that finishes in the app you are already looking at gets a four-second burst and no sound, so a Code session in front of you does not nag. Drag it anywhere; it keeps the spot. The cross at the bubble's top right dismisses it without opening anything. Right-click for **Tasks**, **Dismiss**, **Sound** and **Hide until the next task**.
 
 By default the core only appears when there is something to show. It fades in when a task starts, finishes or needs you, and fades out once nothing has run and nothing has waited on you for two minutes. A finish you have not clicked keeps it on screen. The tray menu's **Pet** picks between **Show while a task runs**, **Always show** and **Never show**. Its position, sound and mode live in `%LOCALAPPDATA%\PromptAdvisor\pet.txt`.
 

@@ -67,6 +67,9 @@ public class PetForm : Form
     double lastBusy = -1000;
     float fade = 1f;
     bool leaving, snoozed;
+    // The bubble's close cross, in canvas pixels; empty with no bubble.
+    RectangleF closeBox = RectangleF.Empty;
+    bool overClose;
     int lastWorking;
 
     public PetForm(TaskBoard board)
@@ -99,8 +102,9 @@ public class PetForm : Form
             pressed = true; dragging = false;
             downAt = Cursor.Position; startAt = Location;
         };
-        MouseMove += delegate
+        MouseMove += delegate (object s, MouseEventArgs e)
         {
+            overClose = closeBox.Contains(e.X / scale, e.Y / scale);
             if (!pressed) return;
             Point p = Cursor.Position;
             if (!dragging && Math.Abs(p.X - downAt.X) + Math.Abs(p.Y - downAt.Y) > 4) dragging = true;
@@ -111,8 +115,10 @@ public class PetForm : Form
             if (e.Button != MouseButtons.Left || !pressed) return;
             pressed = false;
             if (dragging) { dragging = false; Rescale(); Save(); }
+            else if (closeBox.Contains(e.X / scale, e.Y / scale)) { alerts.Clear(); flash = null; overClose = false; }
             else Clicked();
         };
+        MouseLeave += delegate { overClose = false; };
 
         board.Changed += delegate { if (IsHandleCreated) BeginInvoke((Action)Sync); };
         board.Alerted += delegate (TaskItem it) { if (IsHandleCreated) BeginInvoke((Action)delegate { Alert(it); }); };
@@ -309,6 +315,7 @@ public class PetForm : Form
 
     void Draw(Graphics g, double t)
     {
+        closeBox = RectangleF.Empty;
         if (flash != null && t >= flashUntil) flash = null;
         TaskItem shown = alerts.Count > 0 ? alerts[alerts.Count - 1] : flash;
         bool needs = alerts.Count > 0
@@ -416,7 +423,7 @@ public class PetForm : Form
         using (Font fs = new Font("Segoe UI", 8))
         {
             float tw = Math.Max(g.MeasureString(head, fh).Width, Math.Max(g.MeasureString(body, fb).Width, g.MeasureString(hint, fs).Width));
-            float w = Math.Min(W - 16, Math.Max(130, tw + 20));
+            float w = Math.Min(W - 16, Math.Max(150, tw + 40));
             float h = hint.Length > 0 ? 62 : 44;
             float right = W - 8, bottomY = Math.Max(4 + h, top - 8);
             RectangleF r = new RectangleF(right - w, bottomY - h, w, h);
@@ -434,9 +441,23 @@ public class PetForm : Form
                 g.DrawLine(pen, tail[2], tail[0]);
             }
 
+            // A cross in the corner: dismiss without opening anything.
+            RectangleF x = new RectangleF(r.Right - 22, r.Y + 5, 16, 16);
+            closeBox = RectangleF.Inflate(x, 3, 3);
+            if (overClose)
+                using (SolidBrush b = new SolidBrush(Color.FromArgb(60, Paper)))
+                    g.FillEllipse(b, x);
+            using (Pen p = new Pen(overClose ? Paper : Dim, 1.4f))
+            {
+                p.StartCap = p.EndCap = LineCap.Round;
+                float c = x.X + x.Width / 2, m = x.Y + x.Height / 2;
+                g.DrawLine(p, c - 3.5f, m - 3.5f, c + 3.5f, m + 3.5f);
+                g.DrawLine(p, c + 3.5f, m - 3.5f, c - 3.5f, m + 3.5f);
+            }
+
             StringFormat cut = new StringFormat(StringFormatFlags.NoWrap);
             cut.Trimming = StringTrimming.EllipsisCharacter;
-            using (SolidBrush b = new SolidBrush(edge)) g.DrawString(head, fh, b, new RectangleF(r.X + 10, r.Y + 6, r.Width - 20, 16), cut);
+            using (SolidBrush b = new SolidBrush(edge)) g.DrawString(head, fh, b, new RectangleF(r.X + 10, r.Y + 6, r.Width - 36, 16), cut);
             using (SolidBrush b = new SolidBrush(Paper)) g.DrawString(body, fb, b, new RectangleF(r.X + 10, r.Y + 22, r.Width - 20, 16), cut);
             if (hint.Length > 0)
                 using (SolidBrush b = new SolidBrush(Dim)) g.DrawString(hint, fs, b, new RectangleF(r.X + 10, r.Y + 40, r.Width - 20, 17), cut);
