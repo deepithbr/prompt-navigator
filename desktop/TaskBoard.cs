@@ -104,7 +104,11 @@ public class TaskBoard
                 items[key] = it;
             }
             changed = it.State != state;
+            // A Claude Code session is one row across all its turns, so each
+            // new turn restarts the clock rather than counting from the first.
+            if (changed && state == "working" && it.State != "hidden") it.Started = DateTime.Now;
             it.State = state;
+            if (!string.IsNullOrEmpty(source)) it.Source = source;
             if (!string.IsNullOrEmpty(title)) it.Title = title;
             if (string.IsNullOrEmpty(it.Title)) it.Title = source;
             if (!string.IsNullOrEmpty(url)) it.Url = url;
