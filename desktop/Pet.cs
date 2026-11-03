@@ -67,6 +67,8 @@ public class PetForm : Form
     double lastBusy = -1000;
     float fade = 1f;
     bool leaving, snoozed;
+    Canvas canvas;
+
     // The bubble's close cross, in canvas pixels; empty with no bubble.
     RectangleF closeBox = RectangleF.Empty;
     bool overClose;
@@ -157,6 +159,17 @@ public class PetForm : Form
     }
 
     protected override bool ShowWithoutActivation { get { return true; } }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            if (canvas != null) canvas.Dispose();
+            foreach (Bitmap b in glows.Values) b.Dispose();
+            glows.Clear();
+        }
+        base.Dispose(disposing);
+    }
 
     protected override void OnHandleCreated(EventArgs e)
     {
@@ -309,21 +322,20 @@ public class PetForm : Form
     {
         try
         {
-            using (Bitmap bmp = new Bitmap(Width, Height, PixelFormat.Format32bppArgb))
+            if (canvas == null || canvas.Width != Width || canvas.Height != Height)
             {
-                // Font sizes are read against the bitmap's own resolution,
-                // which follows the screen's scaling. Pinned at 96, the text
-                // is scaled once, by the transform below, not twice.
-                bmp.SetResolution(96, 96);
-                using (Graphics g = Graphics.FromImage(bmp))
-                {
-                    g.SmoothingMode = SmoothingMode.AntiAlias;
-                    g.TextRenderingHint = TextRenderingHint.AntiAlias;
-                    g.ScaleTransform(scale, scale);
-                    Draw(g, clock.Elapsed.TotalSeconds);
-                }
-                Layered.Push(this, bmp, (byte)(255 * fade));
+                if (canvas != null) canvas.Dispose();
+                canvas = new Canvas(Width, Height);
             }
+            using (Graphics g = Graphics.FromImage(canvas.Image))
+            {
+                g.Clear(Color.Transparent);
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.TextRenderingHint = TextRenderingHint.AntiAlias;
+                g.ScaleTransform(scale, scale);
+                Draw(g, clock.Elapsed.TotalSeconds);
+            }
+            canvas.Push(this, (byte)(255 * fade));
         }
         catch (Exception e)
         {
@@ -375,12 +387,10 @@ public class PetForm : Form
         else glow = 0.45f + 0.55f * (float)Math.Abs(Math.Sin(t * 4));
 
         // Glow: rings of falling alpha, since a layered window has no blur.
-        for (int i = 6; i >= 0; i--)
-            using (SolidBrush b = new SolidBrush(Color.FromArgb((int)(glow * (14 + (6 - i) * 6)), c)))
-            {
-                float r = 24 + i * 3.4f;
-                g.FillEllipse(b, -r, -r, 2 * r, 2 * r);
-            }
+        // Seven soft rings are the dearest thing in a frame, so each colour
+        // and strength is drawn once and reused.
+        Bitmap halo = Glow(c, glow);
+        g.DrawImage(halo, -GlowR, -GlowR, 2 * GlowR, 2 * GlowR);
 
         // Shock rings: rolling outward for three seconds after a finish, and
         // for as long as something needs you.
@@ -411,6 +421,38 @@ public class PetForm : Form
             g.FillEllipse(b, -11, -11, 22, 22);
         using (SolidBrush b = new SolidBrush(Color.FromArgb((int)(230 * beat), Color.White)))
             g.FillEllipse(b, -5, -5, 10, 10);
+    }
+
+    const float GlowR = 24 + 6 * 3.4f;
+    readonly Dictionary<int, Bitmap> glows = new Dictionary<int, Bitmap>();
+
+    // The glow for one colour at one of 24 strengths, at this screen's scale.
+    Bitmap Glow(Color c, float glow)
+    {
+        int level = Math.Max(0, Math.Min(24, (int)Math.Round(glow * 24)));
+        int key = (c.ToArgb() & 0xFFFFFF) * 32 + level;
+        Bitmap b;
+        if (glows.TryGetValue(key, out b)) return b;
+        if (glows.Count > 96) { foreach (Bitmap old in glows.Values) old.Dispose(); glows.Clear(); }
+
+        int px = (int)Math.Ceiling(2 * GlowR * scale);
+        b = new Bitmap(px, px, PixelFormat.Format32bppPArgb);
+        b.SetResolution(96, 96);
+        using (Graphics g = Graphics.FromImage(b))
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.ScaleTransform(px / (2 * GlowR), px / (2 * GlowR));
+            g.TranslateTransform(GlowR, GlowR);
+            float strength = level / 24f;
+            for (int i = 6; i >= 0; i--)
+                using (SolidBrush brush = new SolidBrush(Color.FromArgb((int)(strength * (14 + (6 - i) * 6)), c)))
+                {
+                    float r = 24 + i * 3.4f;
+                    g.FillEllipse(brush, -r, -r, 2 * r, 2 * r);
+                }
+        }
+        glows[key] = b;
+        return b;
     }
 
     static Color Blend(Color a, Color b, float k)
@@ -537,38 +579,66 @@ public class PetForm : Form
         catch { }
     }
 
-    static class Layered
+    // The window's pixels: a DIB section that GDI+ draws into directly and
+    // UpdateLayeredWindow reads from, so a frame needs no new bitmap and no
+    // conversion. Made again only when the window's size changes.
+    sealed class Canvas : IDisposable
     {
         [StructLayout(LayoutKind.Sequential)] struct SIZE { public int cx, cy; }
         [StructLayout(LayoutKind.Sequential)] struct POINT { public int x, y; }
         [StructLayout(LayoutKind.Sequential, Pack = 1)] struct BLEND { public byte Op, Flags, Alpha, Format; }
+        [StructLayout(LayoutKind.Sequential)] struct BITMAPINFOHEADER
+        {
+            public int Size, Width, Height;
+            public short Planes, BitCount;
+            public int Compression, SizeImage, XPelsPerMeter, YPelsPerMeter, ClrUsed, ClrImportant;
+        }
 
         [DllImport("user32.dll")] static extern bool UpdateLayeredWindow(IntPtr hwnd, IntPtr dst, ref POINT at, ref SIZE size, IntPtr src, ref POINT from, int key, ref BLEND blend, int flags);
-        [DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr h);
-        [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr h, IntPtr dc);
         [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr dc);
         [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr dc);
         [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
         [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr obj);
+        [DllImport("gdi32.dll")] static extern bool GdiFlush();
+        [DllImport("gdi32.dll")] static extern IntPtr CreateDIBSection(IntPtr dc, ref BITMAPINFOHEADER info, uint usage, out IntPtr bits, IntPtr section, uint offset);
 
-        public static void Push(Form f, Bitmap bmp, byte alpha)
+        public readonly int Width, Height;
+        public readonly Bitmap Image;
+        readonly IntPtr dc, dib, old;
+
+        public Canvas(int w, int h)
         {
-            IntPtr screen = GetDC(IntPtr.Zero), mem = CreateCompatibleDC(screen);
-            IntPtr hbmp = bmp.GetHbitmap(Color.FromArgb(0)), old = SelectObject(mem, hbmp);
-            try
-            {
-                SIZE size = new SIZE(); size.cx = bmp.Width; size.cy = bmp.Height;
-                POINT from = new POINT(), at = new POINT(); at.x = f.Left; at.y = f.Top;
-                BLEND blend = new BLEND(); blend.Alpha = alpha; blend.Format = 1; // AC_SRC_ALPHA
-                UpdateLayeredWindow(f.Handle, screen, ref at, ref size, mem, ref from, 0, ref blend, 2); // ULW_ALPHA
-            }
-            finally
-            {
-                SelectObject(mem, old);
-                DeleteObject(hbmp);
-                DeleteDC(mem);
-                ReleaseDC(IntPtr.Zero, screen);
-            }
+            Width = w; Height = h;
+            dc = CreateCompatibleDC(IntPtr.Zero);
+            BITMAPINFOHEADER info = new BITMAPINFOHEADER();
+            info.Size = 40; info.Width = w; info.Height = -h; // top-down, as GDI+ lays rows out
+            info.Planes = 1; info.BitCount = 32;
+            IntPtr bits;
+            dib = CreateDIBSection(dc, ref info, 0, out bits, IntPtr.Zero, 0);
+            old = SelectObject(dc, dib);
+            // Premultiplied alpha is what UpdateLayeredWindow expects.
+            Image = new Bitmap(w, h, w * 4, PixelFormat.Format32bppPArgb, bits);
+            // Font sizes are read against the image's own resolution, which
+            // follows the screen's scaling. Pinned at 96, the text is scaled
+            // once, by the drawing transform, not twice.
+            Image.SetResolution(96, 96);
+        }
+
+        public void Push(Form f, byte alpha)
+        {
+            GdiFlush();
+            SIZE size = new SIZE(); size.cx = Width; size.cy = Height;
+            POINT from = new POINT(), at = new POINT(); at.x = f.Left; at.y = f.Top;
+            BLEND blend = new BLEND(); blend.Alpha = alpha; blend.Format = 1; // AC_SRC_ALPHA
+            UpdateLayeredWindow(f.Handle, IntPtr.Zero, ref at, ref size, dc, ref from, 0, ref blend, 2); // ULW_ALPHA
+        }
+
+        public void Dispose()
+        {
+            Image.Dispose();
+            SelectObject(dc, old);
+            DeleteObject(dib);
+            DeleteDC(dc);
         }
     }
 }

@@ -437,7 +437,7 @@ public class TaskBoard
      * it is marked "hidden" until the window comes back.
      * -------------------------------------------------------------- */
 
-    class AppWatch { public string Key; public bool Running, Blind, Away; public DateTime Since, BackAt; }
+    class AppWatch { public string Key; public bool Running, Blind, Away; public DateTime Since, BackAt, LastScan; }
     readonly Dictionary<string, AppWatch> watches = new Dictionary<string, AppWatch>();
 
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
@@ -446,15 +446,27 @@ public class TaskBoard
     {
         while (running)
         {
-            try { WatchOne("claude", "Claude app"); } catch { }
+            try { if (Due("claude")) WatchOne("claude", "Claude app"); } catch { }
             try { ScanClaudeToasts(); } catch (Exception e) { Log("claude toasts: " + e.Message); }
             try { Dictionary<string, object> d; while (accountQueue.TryDequeue(out d)) AccountEvent(d); } catch (Exception e) { Log("claude account: " + e.Message); }
             // Codex before ChatGPT, so a Codex or Work run the files already
             // know about is not listed a second time from the app's screen.
             try { ScanCodex(); } catch (Exception e) { Log("codex watch: " + e.Message); }
-            try { WatchOne("ChatGPT", "ChatGPT app"); } catch { }
+            try { if (Due("ChatGPT")) WatchOne("ChatGPT", "ChatGPT app"); } catch { }
             Thread.Sleep(2000);
         }
+    }
+
+    // Reading an app's screen costs it and us a little each time, so it is
+    // read every 2 seconds only while a run is going or you are in that app,
+    // which is when one starts; otherwise every 6.
+    bool Due(string proc)
+    {
+        AppWatch w;
+        if (!watches.TryGetValue(proc, out w)) { w = new AppWatch(); watches[proc] = w; }
+        bool due = w.Running || w.Blind || InFront(proc) || (DateTime.Now - w.LastScan).TotalSeconds >= 6;
+        if (due) w.LastScan = DateTime.Now;
+        return due;
     }
 
     void WatchOne(string proc, string label)
