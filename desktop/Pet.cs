@@ -1,16 +1,15 @@
-// The desk pet: a fighter's face in a corner of the screen that shows what
+// The desk pet: an energy core in a corner of the screen that shows what
 // the task board knows without opening it.
 //
-// His eyes stay shut while nothing runs. While any Claude or ChatGPT task
-// works, a blue aura burns around him and his war marks glow. When one
-// finishes the aura flares gold and his eyes blaze, and when one needs you it
-// all burns red, with a bubble naming the task. The bubble stays until you click him, which brings that
-// task's app forward. A tray balloon was the only signal before, and Windows
-// hides those under Do not disturb and drops them after a few seconds.
+// It glows dim grey and barely turns while nothing runs. While any Claude or
+// ChatGPT task works it turns blue and spins. When one finishes it bursts
+// gold, and when one needs you it pulses red, with a bubble naming the task.
+// The bubble stays until you click the core, which brings that task's app
+// forward. A tray balloon was the only signal before, and Windows hides those
+// under Do not disturb and drops them after a few seconds.
 //
-// The window is a layered window drawn with per-pixel alpha, so only the
-// face and his bubble catch the mouse and everything around them clicks
-// through.
+// The window is a layered window drawn with per-pixel alpha, so only the core
+// and its bubble catch the mouse and everything around them clicks through.
 
 using System;
 using System.Collections.Generic;
@@ -28,15 +27,10 @@ public class PetForm : Form
 {
     enum Mood { Resting, Working, Done, Needs }
 
-    // The canvas, in pixels at 100% scaling. His face sits bottom right
-    // and the bubble sits above him, so the window can hug the screen corner.
+    // The canvas, in pixels at 100% scaling. The core sits bottom right and
+    // the bubble above it, so the window can hug the screen corner.
     const int W = 300, H = 200, Span = 84;
 
-    static readonly Color Skin = Color.FromArgb(226, 184, 148);
-    static readonly Color Hair = Color.FromArgb(28, 24, 32);
-    static readonly Color Scarf = Color.FromArgb(178, 36, 40);
-    static readonly Color Mark = Color.FromArgb(150, 40, 44);
-    static readonly Color Ink = Color.FromArgb(18, 16, 22);
     static readonly Color Blue = Color.FromArgb(91, 157, 187);
     static readonly Color Gold = Color.FromArgb(255, 200, 70);
     static readonly Color Red = Color.FromArgb(226, 70, 58);
@@ -53,7 +47,7 @@ public class PetForm : Form
     float scale = 1f;
     int working;
     double alertAt = -100;
-    // A finish in the app you are already looking at gets a short flare and
+    // A finish in the app you are already looking at gets a short burst and
     // bubble, and is not kept, so a Code session in front of you does not nag.
     TaskItem flash;
     double flashUntil;
@@ -263,264 +257,79 @@ public class PetForm : Form
             : flash != null && flash.State == "needs";
         Mood mood = needs ? Mood.Needs : shown != null ? Mood.Done
             : working > 0 ? Mood.Working : Mood.Resting;
-        double since = t - alertAt;
 
-        float lift = 0, shake = 0, power = 0;
-        Color aura = Color.Empty;
-        if (mood == Mood.Resting) lift = (float)(Math.Sin(t * 1.4) * 0.6);
-        else if (mood == Mood.Working)
-        {
-            aura = Blue;
-            power = 0.85f + 0.06f * (float)Math.Sin(t * 3);
-            shake = (float)Math.Sin(t * 41) * 0.4f;
-        }
-        else if (mood == Mood.Done)
-        {
-            // A big flare for three seconds, hovering, then a steady glow.
-            aura = Gold;
-            double rise = Math.Min(1, since / 0.3), fall = since < 3 ? 1 : Math.Max(0, 1 - (since - 3) / 0.6);
-            lift = (float)(7 * rise * fall);
-            power = since < 3 ? 1.05f + 0.1f * (float)Math.Sin(t * 9) : 0.72f + 0.06f * (float)Math.Sin(t * 2.2);
-        }
-        else
-        {
-            aura = Red;
-            power = 0.75f + 0.2f * (float)Math.Abs(Math.Sin(t * 4));
-            shake = (float)Math.Sin(t * 53) * 0.8f;
-        }
-
-        float cx = W - 8 - Span / 2f + shake, ground = H - 8;
-
+        float cx = W - 8 - Span / 2f, cy = H - 8 - Span / 2f;
         GraphicsState saved = g.Save();
-        g.TranslateTransform(cx, ground - 2 - lift);
-        if (aura != Color.Empty) DrawAura(g, t, aura, power);
-        if (mood == Mood.Needs || (mood == Mood.Done && since < 3)) DrawSparks(g, t, aura, power);
-        DrawFace(g, t, mood, aura);
+        g.TranslateTransform(cx, cy);
+        DrawCore(g, t, mood, t - alertAt);
         g.Restore(saved);
 
-        float top = ground - 2 - lift - 112;
+        float top = cy - 34;
         if (mood == Mood.Working && working > 1) DrawCount(g, cx, top);
         if (shown != null) DrawBubble(g, mood, shown, cx, top);
     }
 
-    // Flames around him: an oval whose upper edge licks upward in tongues
-    // that shift every frame.
-    void DrawAura(Graphics g, double t, Color c, float power)
+    // The core, centred on the origin: a soft glow, an outer ring of eight
+    // segments, two inner arcs turning the other way, and a bright heart.
+    // Grey and slow at rest, blue and turning while a task works, a gold
+    // burst of rings when one finishes, a red pulse when one needs you.
+    void DrawCore(Graphics g, double t, Mood mood, double since)
     {
-        for (int layer = 0; layer < 2; layer++)
+        Color c = mood == Mood.Working ? Blue : mood == Mood.Done ? Gold : mood == Mood.Needs ? Red : Dim;
+        bool burst = mood == Mood.Done && since < 3;
+
+        // Degrees a second for the outer ring; the inner arcs run the other way, faster.
+        double speed = mood == Mood.Working ? 70 : burst ? 260 : mood == Mood.Done ? 30 : mood == Mood.Needs ? 110 : 6;
+        float spin = (float)(t * speed % 360);
+
+        float glow;
+        if (mood == Mood.Resting) glow = 0.25f + 0.1f * (float)Math.Sin(t * 1.2);
+        else if (mood == Mood.Working) glow = 0.55f + 0.1f * (float)Math.Sin(t * 3);
+        else if (mood == Mood.Done) glow = burst ? 1f : 0.7f + 0.1f * (float)Math.Sin(t * 2);
+        else glow = 0.45f + 0.55f * (float)Math.Abs(Math.Sin(t * 4));
+
+        // Glow: rings of falling alpha, since a layered window has no blur.
+        for (int i = 6; i >= 0; i--)
+            using (SolidBrush b = new SolidBrush(Color.FromArgb((int)(glow * (14 + (6 - i) * 6)), c)))
+            {
+                float r = 24 + i * 3.4f;
+                g.FillEllipse(b, -r, -r, 2 * r, 2 * r);
+            }
+
+        // Shock rings: rolling outward for three seconds after a finish, and
+        // for as long as something needs you.
+        if (burst || mood == Mood.Needs)
+            using (Pen p = new Pen(c, 2f))
+                for (int w = 0; w < 3; w++)
+                {
+                    double ph = (t * (burst ? 1.6 : 1.1) + w / 3.0) % 1;
+                    float r = 30 + (float)ph * 11;
+                    p.Color = Color.FromArgb((int)(220 * (1 - ph)), c);
+                    g.DrawEllipse(p, -r, -r, 2 * r, 2 * r);
+                }
+
+        Color ring = mood == Mood.Resting ? Color.FromArgb(150, c) : c;
+        using (Pen outer = new Pen(ring, 3.2f))
+            for (int k = 0; k < 8; k++)
+                g.DrawArc(outer, -28, -28, 56, 56, spin + k * 45, 31);
+
+        using (Pen inner = new Pen(Blend(ring, Color.White, 0.2f), 2f))
         {
-            float s = layer == 0 ? 1f : 0.74f;
-            float rx = 40 * power * s, ry = 52 * power * s, cy = -62;
-            PointF[] pts = new PointF[56];
-            for (int i = 0; i < pts.Length; i++)
-            {
-                double a = 2 * Math.PI * i / pts.Length;
-                double up = Math.Max(0, -Math.Sin(a));
-                double n = 0.06 * Math.Sin(a * 7 + t * 11 + layer * 2);
-                double tongue = up * (i % 2 == 1 ? 0.28 + 0.22 * Math.Sin(a * 9 + t * 16 + layer) : 0.05);
-                float x = (float)(Math.Cos(a) * rx * (1 + n) * (1 - up * 0.35));
-                float y = (float)(cy + Math.Sin(a) * ry * (1 + n) - tongue * ry);
-                pts[i] = new PointF(x, Math.Min(y, 2));
-            }
-            using (SolidBrush b = new SolidBrush(Color.FromArgb(layer == 0 ? 70 : 110, c)))
-                g.FillClosedCurve(b, pts, FillMode.Winding, 0.35f);
+            inner.StartCap = inner.EndCap = LineCap.Round;
+            g.DrawArc(inner, -19, -19, 38, 38, -spin * 1.6f, 110);
+            g.DrawArc(inner, -19, -19, 38, 38, -spin * 1.6f + 180, 110);
         }
-    }
 
-    // A close-up of his head, origin below the scarf, y going up as it goes
-    // negative. At rest his eyes are shut. With his power up the war marks on
-    // his cheeks and brow light in the aura's colour, and when a task finishes
-    // or needs you his eyes blaze with it too.
-    void DrawFace(Graphics g, double t, Mood mood, Color aura)
-    {
-        bool blazing = mood == Mood.Done || mood == Mood.Needs;
-        float wind = mood == Mood.Resting ? 0.3f : 1f;
-        using (Pen line = new Pen(Ink, 1.5f))
-        using (SolidBrush ink = new SolidBrush(Ink))
-        using (SolidBrush skin = new SolidBrush(Skin))
-        using (SolidBrush shade = new SolidBrush(Color.FromArgb(55, 40, 10, 20)))
-        {
-            line.LineJoin = LineJoin.Round;
-
-            // The topknot's tail streams out behind him.
-            float sway = (float)Math.Sin(t * (1.5 + 5 * wind)) * 3 * wind;
-            using (Pen tail = new Pen(Hair, 3.2f))
-            {
-                tail.StartCap = tail.EndCap = LineCap.Round;
-                g.DrawBezier(tail, 6, -106, 16, -110 + sway, 24, -104 - sway, 32, -100 + sway);
-                g.DrawBezier(tail, 6, -104, 14, -104 - sway, 20, -96 + sway, 27, -92 - sway);
-            }
-
-            // Neck.
-            g.FillRectangle(skin, -9, -40, 18, 22);
-            g.FillRectangle(shade, -9, -40, 6, 22);
-            g.DrawLine(line, -9, -40, -9, -20);
-            g.DrawLine(line, 9, -40, 9, -20);
-
-            // Ears, then the face: a long, angular jaw.
-            g.FillEllipse(skin, -26, -67, 7, 13); g.DrawEllipse(line, -26, -67, 7, 13);
-            g.FillEllipse(skin, 19, -67, 7, 13); g.DrawEllipse(line, 19, -67, 7, 13);
-            PointF[] face =
-            {
-                new PointF(-22, -84), new PointF(22, -84), new PointF(21.5f, -63), new PointF(16, -46),
-                new PointF(7, -36.5f), new PointF(0, -35), new PointF(-7, -36.5f), new PointF(-16, -46), new PointF(-21.5f, -63)
-            };
-            g.FillClosedCurve(skin, face, FillMode.Alternate, 0.25f);
-            PointF[] cheek = { new PointF(-22, -82), new PointF(-12, -82), new PointF(-8, -50), new PointF(-7, -36.5f), new PointF(-16, -46), new PointF(-21.5f, -63) };
-            g.FillClosedCurve(shade, cheek, FillMode.Alternate, 0.25f);
-            g.DrawClosedCurve(line, face, 0.25f, FillMode.Alternate);
-
-            // The scarf wound round his neck.
-            RectangleF wrap = new RectangleF(-17, -26, 34, 13);
-            using (GraphicsPath p = Rounded(wrap, 6))
-            using (SolidBrush b = new SolidBrush(Scarf)) { g.FillPath(b, p); g.DrawPath(line, p); }
-            g.DrawLine(line, -10, -24, -6, -15);
-            g.DrawLine(line, 2, -25, 6, -15);
-
-            // Hair swept straight back into a topknot, a few locks falling forward.
-            PointF[] hair =
-            {
-                new PointF(-24, -66), new PointF(-25, -84), new PointF(-18, -98), new PointF(-4, -104),
-                new PointF(10, -103), new PointF(22, -96), new PointF(25, -84), new PointF(24, -66),
-                new PointF(20, -76), new PointF(15, -80), new PointF(10, -77), new PointF(5, -82),
-                new PointF(-2, -73), new PointF(-4, -81), new PointF(-11, -79), new PointF(-17, -82), new PointF(-20, -74)
-            };
-            using (SolidBrush b = new SolidBrush(Hair)) g.FillPolygon(b, hair);
-            g.DrawPolygon(line, hair);
-            using (SolidBrush b = new SolidBrush(Hair)) g.FillEllipse(b, -3, -116, 13, 12);
-            g.DrawEllipse(line, -3, -116, 13, 12);
-            using (SolidBrush b = new SolidBrush(Scarf)) g.FillRectangle(b, -1, -106, 9, 3);
-
-            // Light from the aura catches the far edge of his hair, face and neck.
-            if (aura != Color.Empty)
-                using (Pen rim = new Pen(Color.FromArgb(blazing ? 230 : 160, aura), 1.6f))
-                {
-                    rim.StartCap = rim.EndCap = LineCap.Round;
-                    g.DrawCurve(rim, new PointF[] { new PointF(10, -103), new PointF(22, -96), new PointF(25, -84) }, 0.5f);
-                    g.DrawCurve(rim, new PointF[] { new PointF(21.5f, -63), new PointF(16, -46), new PointF(7, -36.5f) }, 0.5f);
-                    g.DrawLine(rim, 9.5f, -39, 9.5f, -27);
-                }
-
-            // War marks: two strokes across each cheekbone and one on the brow.
-            // Dark red at rest, lit in the aura's colour once his power is up.
-            Color markColour = aura == Color.Empty ? Mark : Blend(aura, Color.White, blazing ? 0.45f : 0.15f);
-            if (aura != Color.Empty)
-            {
-                float glow = blazing ? 1f : 0.6f + 0.25f * (float)Math.Sin(t * 4);
-                using (Pen halo = new Pen(Color.FromArgb((int)(110 * glow), aura), 5f))
-                {
-                    halo.StartCap = halo.EndCap = LineCap.Round;
-                    Marks(g, halo);
-                }
-            }
-            using (Pen mark = new Pen(markColour, 1.8f))
-            {
-                mark.StartCap = mark.EndCap = LineCap.Round;
-                Marks(g, mark);
-            }
-
-            // Brows: heavy, set hard, steeper when something needs you.
-            float steep = mood == Mood.Needs ? 5f : 3f;
-            PointF[] browL = { new PointF(-17, -69 - steep), new PointF(-4, -66), new PointF(-4, -63.6f), new PointF(-17, -66.5f - steep) };
-            PointF[] browR = { new PointF(17, -69 - steep), new PointF(4, -66), new PointF(4, -63.6f), new PointF(17, -66.5f - steep) };
-            g.FillPolygon(ink, browL);
-            g.FillPolygon(ink, browR);
-
-            // Eyes.
-            if (mood == Mood.Resting)
-            {
-                using (Pen lid = new Pen(Ink, 1.8f))
-                {
-                    lid.StartCap = lid.EndCap = LineCap.Round;
-                    g.DrawLine(lid, -15, -59.5f, -6, -58.5f);
-                    g.DrawLine(lid, 6, -58.5f, 15, -59.5f);
-                }
-            }
-            else
-            {
-                float open = mood == Mood.Needs ? 5.5f : 4.2f;
-                if (mood == Mood.Working && (t % 4.3) < 0.1) open = 0.8f;
-                foreach (int side in new int[] { -1, 1 })
-                {
-                    PointF[] eye =
-                    {
-                        new PointF(side * 15.5f, -59.5f), new PointF(side * 11, -59.5f - open * 0.6f),
-                        new PointF(side * 5.5f, -59f), new PointF(side * 10, -59.5f + open * 0.4f)
-                    };
-                    if (blazing)
-                    {
-                        // No pupils, only light.
-                        using (SolidBrush halo = new SolidBrush(Color.FromArgb(120, aura)))
-                            g.FillEllipse(halo, side * 10.5f - 8, -64, 16, 10);
-                        using (SolidBrush b = new SolidBrush(Blend(aura, Color.White, 0.55f)))
-                            g.FillClosedCurve(b, eye, FillMode.Alternate, 0.3f);
-                    }
-                    else
-                    {
-                        g.FillClosedCurve(Brushes.White, eye, FillMode.Alternate, 0.3f);
-                        float look = (float)Math.Sin(t * 0.8) * 1.6f;
-                        g.FillEllipse(ink, side * 10 - 1.8f + look, -59.5f - open * 0.5f, 3.6f, open);
-                    }
-                    g.DrawClosedCurve(line, eye, 0.3f, FillMode.Alternate);
-                }
-            }
-
-            // Nose and mouth.
-            g.DrawLine(line, 0.5f, -55, 2.5f, -48.5f);
-            g.DrawLine(line, 2.5f, -48.5f, -0.5f, -48);
-            using (Pen lip = new Pen(Ink, 1.6f))
-            {
-                lip.StartCap = lip.EndCap = LineCap.Round;
-                if (mood == Mood.Done)
-                    g.DrawBezier(lip, -5, -42.5f, -1, -42.5f, 3, -42.8f, 6, -45.5f);
-                else if (mood == Mood.Needs)
-                {
-                    g.FillRectangle(Brushes.White, -5, -44, 10, 3);
-                    g.DrawRectangle(lip, -5, -44, 10, 3);
-                    g.DrawLine(line, -5, -42.5f, 5, -42.5f);
-                }
-                else
-                    g.DrawLine(lip, -4.5f, -42.5f, 4.5f, -43);
-            }
-        }
-    }
-
-    static void Marks(Graphics g, Pen p)
-    {
-        // Slashed back along the cheekbones toward the ears. Drawn straight
-        // down from the eyes they read as tears.
-        g.DrawLine(p, -11, -53, -19, -56);
-        g.DrawLine(p, -11, -49, -18, -51.5f);
-        g.DrawLine(p, 11, -53, 19, -56);
-        g.DrawLine(p, 11, -49, 18, -51.5f);
-        g.DrawLine(p, 0, -80, 0, -75);
-    }
-
-    // Short bolts that jump around him, a new set every eighth of a second.
-    static void DrawSparks(Graphics g, double t, Color c, float power)
-    {
-        Random r = new Random((int)(t * 8));
-        using (Pen p = new Pen(Color.FromArgb(235, Blend(c, Color.White, 0.6f)), 1.4f))
-        {
-            for (int k = 0; k < 3; k++)
-            {
-                double a = r.NextDouble() * Math.PI * 2;
-                float x = (float)Math.Cos(a) * 36 * power, y = -62 + (float)Math.Sin(a) * 46 * power;
-                PointF[] bolt = new PointF[4];
-                for (int i = 0; i < bolt.Length; i++)
-                {
-                    bolt[i] = new PointF(x, y);
-                    x += (float)(Math.Cos(a) * 5 + r.NextDouble() * 8 - 4);
-                    y += (float)(Math.Sin(a) * 5 + r.NextDouble() * 8 - 4);
-                }
-                g.DrawLines(p, bolt);
-            }
-        }
+        float beat = mood == Mood.Needs ? glow : mood == Mood.Resting ? 0.6f + 0.25f * (float)Math.Sin(t * 1.2) : 1f;
+        using (SolidBrush b = new SolidBrush(Color.FromArgb((int)(255 * Math.Min(1, beat + 0.15f)), Blend(c, Color.White, 0.3f))))
+            g.FillEllipse(b, -11, -11, 22, 22);
+        using (SolidBrush b = new SolidBrush(Color.FromArgb((int)(230 * beat), Color.White)))
+            g.FillEllipse(b, -5, -5, 10, 10);
     }
 
     static Color Blend(Color a, Color b, float k)
     {
-        return Color.FromArgb((int)(a.R + (b.R - a.R) * k), (int)(a.G + (b.G - a.G) * k), (int)(a.B + (b.B - a.B) * k));
+        return Color.FromArgb(a.A, (int)(a.R + (b.R - a.R) * k), (int)(a.G + (b.G - a.G) * k), (int)(a.B + (b.B - a.B) * k));
     }
 
     void DrawCount(Graphics g, float cx, float top)
@@ -529,10 +338,10 @@ public class PetForm : Form
         using (SolidBrush b = new SolidBrush(Blue))
         using (Font f = new Font("Segoe UI", 8, FontStyle.Bold))
         {
-            g.FillEllipse(b, cx + 18, top + 8, 17, 17);
+            g.FillEllipse(b, cx + 22, top - 4, 17, 17);
             StringFormat mid = new StringFormat();
             mid.Alignment = mid.LineAlignment = StringAlignment.Center;
-            g.DrawString(working.ToString(), f, Brushes.White, new RectangleF(cx + 18, top + 8, 17, 17), mid);
+            g.DrawString(working.ToString(), f, Brushes.White, new RectangleF(cx + 22, top - 4, 17, 17), mid);
         }
     }
 
@@ -550,7 +359,7 @@ public class PetForm : Form
             float tw = Math.Max(g.MeasureString(head, fh).Width, Math.Max(g.MeasureString(body, fb).Width, g.MeasureString(hint, fs).Width));
             float w = Math.Min(W - 16, Math.Max(130, tw + 20));
             float h = hint.Length > 0 ? 62 : 44;
-            float right = W - 8, bottomY = Math.Min(top - 8, 8 + h);
+            float right = W - 8, bottomY = Math.Max(4 + h, top - 8);
             RectangleF r = new RectangleF(right - w, bottomY - h, w, h);
 
             Color edge = mood == Mood.Needs ? Orange : Green;

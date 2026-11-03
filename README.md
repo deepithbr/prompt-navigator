@@ -99,18 +99,18 @@ If its notifications never appear, check Windows **Do not disturb**, the bell ic
 
 **The desk pet**
 
-A fighter's face sits in the bottom-right corner of the screen, above the taskbar, and shows what the board knows without opening it. Do not disturb does not hide him, and he does not go away after six seconds the way a banner does.
+An energy core sits in the bottom-right corner of the screen, above the taskbar, and shows what the board knows without opening it. Do not disturb does not hide it, and it does not go away after six seconds the way a banner does.
 
-![The pet resting, working on two tasks, after a finish, and when a task needs you](docs/screenshots/pet-states.png)
+![The core resting, working on two tasks, after a finish, and when a task needs you](docs/screenshots/pet-states.png)
 
-| He shows | When |
+| It shows | When |
 |---|---|
-| Eyes shut, no aura | Nothing is running |
-| A blue aura and glowing war marks, with a count if more than one task runs | Any Claude or ChatGPT task is working |
-| A gold flare with sparks, blazing eyes, a smirk and a green bubble naming the task | A task finished while you were in another app |
-| A red aura with sparks, burning eyes, gritted teeth and an orange bubble | A task needs your approval or answer |
+| A dim grey ring, barely turning | Nothing is running |
+| Blue rings spinning, with a count if more than one task runs | Any Claude or ChatGPT task is working |
+| A gold burst of rings, then a steady gold glow, and a green bubble naming the task | A task finished while you were in another app |
+| A red pulse with rings rolling outward and an orange bubble | A task needs your approval or answer |
 
-The bubble stays until you click him, which brings that task's app forward. Clicking him with no bubble opens the task list. A task that finishes in the app you are already looking at gets a four-second flare and no sound, so a Code session in front of you does not nag. Drag him anywhere; he keeps the spot. Right-click for **Tasks**, **Dismiss**, **Sound** and **Hide pet**, and bring him back from the tray menu's **Pet**. His position and sound setting live in `%LOCALAPPDATA%\PromptAdvisor\pet.txt`.
+The bubble stays until you click the core, which brings that task's app forward. Clicking it with no bubble opens the task list. A task that finishes in the app you are already looking at gets a four-second burst and no sound, so a Code session in front of you does not nag. Drag it anywhere; it keeps the spot. Right-click for **Tasks**, **Dismiss**, **Sound** and **Hide pet**, and bring it back from the tray menu's **Pet**. Its position and sound setting live in `%LOCALAPPDATA%\PromptAdvisor\pet.txt`.
 
 ---
 
