@@ -295,6 +295,10 @@ public class PetForm : Form
         {
             using (Bitmap bmp = new Bitmap(Width, Height, PixelFormat.Format32bppArgb))
             {
+                // Font sizes are read against the bitmap's own resolution,
+                // which follows the screen's scaling. Pinned at 96, the text
+                // is scaled once, by the transform below, not twice.
+                bmp.SetResolution(96, 96);
                 using (Graphics g = Graphics.FromImage(bmp))
                 {
                     g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -424,7 +428,7 @@ public class PetForm : Form
         {
             float tw = Math.Max(g.MeasureString(head, fh).Width, Math.Max(g.MeasureString(body, fb).Width, g.MeasureString(hint, fs).Width));
             float w = Math.Min(W - 16, Math.Max(150, tw + 40));
-            float h = hint.Length > 0 ? 62 : 44;
+            float h = hint.Length > 0 ? 66 : 48;
             float right = W - 8, bottomY = Math.Max(4 + h, top - 8);
             RectangleF r = new RectangleF(right - w, bottomY - h, w, h);
 
@@ -457,10 +461,10 @@ public class PetForm : Form
 
             StringFormat cut = new StringFormat(StringFormatFlags.NoWrap);
             cut.Trimming = StringTrimming.EllipsisCharacter;
-            using (SolidBrush b = new SolidBrush(edge)) g.DrawString(head, fh, b, new RectangleF(r.X + 10, r.Y + 6, r.Width - 36, 16), cut);
-            using (SolidBrush b = new SolidBrush(Paper)) g.DrawString(body, fb, b, new RectangleF(r.X + 10, r.Y + 22, r.Width - 20, 16), cut);
+            using (SolidBrush b = new SolidBrush(edge)) g.DrawString(head, fh, b, new RectangleF(r.X + 10, r.Y + 6, r.Width - 36, 19), cut);
+            using (SolidBrush b = new SolidBrush(Paper)) g.DrawString(body, fb, b, new RectangleF(r.X + 10, r.Y + 25, r.Width - 20, 19), cut);
             if (hint.Length > 0)
-                using (SolidBrush b = new SolidBrush(Dim)) g.DrawString(hint, fs, b, new RectangleF(r.X + 10, r.Y + 40, r.Width - 20, 17), cut);
+                using (SolidBrush b = new SolidBrush(Dim)) g.DrawString(hint, fs, b, new RectangleF(r.X + 10, r.Y + 45, r.Width - 20, 17), cut);
         }
     }
 

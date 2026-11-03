@@ -437,7 +437,7 @@ public class TaskBoard
      * it is marked "hidden" until the window comes back.
      * -------------------------------------------------------------- */
 
-    class AppWatch { public string Key; public bool Running, Blind; public DateTime Since; }
+    class AppWatch { public string Key; public bool Running, Blind, Away; public DateTime Since, BackAt; }
     readonly Dictionary<string, AppWatch> watches = new Dictionary<string, AppWatch>();
 
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
@@ -504,6 +504,7 @@ public class TaskBoard
         bool seen = !IsIconic(p.MainWindowHandle) && (proc != "ChatGPT" || composer);
         if (!seen)
         {
+            w.Away = true;
             if (w.Running && !w.Blind && w.Key != null)
             {
                 w.Blind = true;
@@ -511,11 +512,16 @@ public class TaskBoard
             }
             return;
         }
+        if (w.Away) { w.Away = false; w.BackAt = DateTime.Now; }
         if (w.Blind)
         {
             w.Blind = false;
             if (stop && w.Key != null) Upsert(w.Key, label, null, "working", "", app, true);
         }
+
+        // A window coming back can show the Stop button it froze with for a
+        // moment before it catches up. A start seen in that moment is not one.
+        if (stop && !w.Running && (DateTime.Now - w.BackAt).TotalSeconds < 4) return;
 
         if (stop && !w.Running)
         {
@@ -986,11 +992,13 @@ public class BoardForm : Form
     readonly TaskBoard board;
     readonly System.Windows.Forms.Timer tick = new System.Windows.Forms.Timer();
     readonly Stopwatch clock = Stopwatch.StartNew();
-    readonly Font title = new Font("Segoe UI Semibold", 13f, GraphicsUnit.Point);
-    readonly Font sub = new Font("Segoe UI", 9f, GraphicsUnit.Point);
-    readonly Font name = new Font("Segoe UI", 10f, GraphicsUnit.Point);
-    readonly Font meta = new Font("Segoe UI", 8.5f, GraphicsUnit.Point);
-    readonly Font label = new Font("Segoe UI Semibold", 8.5f, GraphicsUnit.Point);
+    // Sizes in pixels at 100%, so the screen's scaling is applied once, by
+    // the transform in OnPaint, and not a second time through point sizes.
+    readonly Font title = new Font("Segoe UI Semibold", 17.5f, GraphicsUnit.Pixel);
+    readonly Font sub = new Font("Segoe UI", 12f, GraphicsUnit.Pixel);
+    readonly Font name = new Font("Segoe UI", 13.5f, GraphicsUnit.Pixel);
+    readonly Font meta = new Font("Segoe UI", 11.5f, GraphicsUnit.Pixel);
+    readonly Font label = new Font("Segoe UI Semibold", 11.5f, GraphicsUnit.Pixel);
 
     List<TaskItem> items = new List<TaskItem>();
     readonly List<RectangleF> rowRects = new List<RectangleF>();
