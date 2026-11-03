@@ -51,6 +51,10 @@ public class TaskBoard
     BoardForm form;
     volatile bool running = true;
 
+    // For the desk pet. Both are raised on the board's own threads.
+    public event Action Changed;
+    public event Action<TaskItem> Alerted;
+
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
@@ -107,11 +111,15 @@ public class TaskBoard
         }
         Save();
         Refresh();
+        Action c = Changed;
+        if (c != null) c();
         if (changed && !quiet && (state == "done" || state == "needs"))
         {
             string head = (state == "done" ? "Done \u00B7 " : "Needs you \u00B7 ") + source;
             string body = it.Title;
             ui.BeginInvoke((Action)delegate { tray.ShowBalloonTip(6000, head, body, ToolTipIcon.None); });
+            Action<TaskItem> a = Alerted;
+            if (a != null) a(it);
         }
     }
 
@@ -147,11 +155,24 @@ public class TaskBoard
         }
         Save();
         Refresh();
+        Action c = Changed;
+        if (c != null) c();
     }
 
     void Save()
     {
-        try { lock (gate) File.WriteAllText(store, json.Serialize(new List<TaskItem>(items.Values))); } catch { }
+        // Written beside the store and swapped in, so a companion stopped
+        // mid-write leaves the old list rather than a truncated one.
+        try
+        {
+            lock (gate)
+            {
+                string tmp = store + ".tmp";
+                File.WriteAllText(tmp, json.Serialize(new List<TaskItem>(items.Values)));
+                if (File.Exists(store)) File.Replace(tmp, store, null); else File.Move(tmp, store);
+            }
+        }
+        catch { }
     }
 
     void Load()
@@ -195,10 +216,15 @@ public class TaskBoard
     }
 
     // Bring forward the app a task belongs to.
+    public static string ProcessFor(string app)
+    {
+        return app == "claude" ? "claude" : app == "chatgpt" ? "ChatGPT" : app == "brave" ? "brave" : null;
+    }
+
     public void Open(TaskItem it)
     {
         if (it == null) return;
-        string proc = it.App == "claude" ? "claude" : it.App == "chatgpt" ? "ChatGPT" : it.App == "brave" ? "brave" : null;
+        string proc = ProcessFor(it.App);
         if (proc == null) return;
         foreach (Process p in Process.GetProcessesByName(proc))
         {

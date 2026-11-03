@@ -247,6 +247,7 @@ class AdvisorContext : ApplicationContext
     readonly Rules rules;
     readonly Thread worker;
     TaskBoard board;
+    PetForm pet;
     volatile bool running = true, paused = false;
 
     // What the worker last saw, so the rules are asked only when it changes.
@@ -274,6 +275,10 @@ class AdvisorContext : ApplicationContext
         menu.MenuItems.Add(about);
         menu.MenuItems.Add("-");
         menu.MenuItems.Add("Tasks", delegate { if (board != null) board.Show(); });
+        MenuItem petItem = new MenuItem("Pet");
+        petItem.Click += delegate { if (pet != null) pet.SetWanted(!pet.Wanted); };
+        menu.Popup += delegate { petItem.Checked = pet != null && pet.Wanted; };
+        menu.MenuItems.Add(petItem);
         MenuItem pause = new MenuItem("Pause");
         pause.Click += delegate { paused = !paused; pause.Text = paused ? "Resume" : "Pause"; if (paused) HideHint(); };
         menu.MenuItems.Add(pause);
@@ -287,6 +292,10 @@ class AdvisorContext : ApplicationContext
         board = new TaskBoard(tray, hint);
         tray.MouseClick += delegate (object s, MouseEventArgs e) { if (e.Button == MouseButtons.Left) board.Show(); };
         tray.BalloonTipClicked += delegate { board.Show(); };
+
+        // The desk pet in the corner of the screen, fed by the board.
+        pet = new PetForm(board);
+        if (pet.Wanted) pet.Show();
 
         worker = new Thread(Loop);
         worker.IsBackground = true;
