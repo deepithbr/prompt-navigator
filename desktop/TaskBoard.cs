@@ -318,16 +318,23 @@ public class TaskBoard
                 bool localHost = host == "127.0.0.1:" + Port || host == "localhost:" + Port;
                 bool okOrigin = origin.Length == 0 || origin.StartsWith("chrome-extension://");
                 if (!localHost || !okOrigin) ours = false;
-                string status = "204 No Content";
+                string status = "204 No Content", answer = "";
                 if (method == "GET" && path == "/ping") status = localHost ? "200 OK" : "403 Forbidden";
+                else if (method == "GET" && path == "/claude-state" && ours) { status = "200 OK"; answer = ClaudeState(); }
                 else if (method == "POST" && path == "/show" && ours) Show();
                 else if (method != "POST" || !ours) status = "403 Forbidden";
                 else Route(path, Encoding.UTF8.GetString(body, 0, have));
                 // One line per request, so a report that never shows up can be
-                // traced: no line means it never reached the board.
-                BoardLog(method + " " + path + " host=" + host + " origin=" + (origin.Length > 0 ? origin : "-") + " -> " + status);
-                byte[] reply = Encoding.ASCII.GetBytes("HTTP/1.1 " + status + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                // traced: no line means it never reached the board. The
+                // extension's half-minute question is left out.
+                if (path != "/claude-state" || status != "200 OK")
+                    BoardLog(method + " " + path + " host=" + host + " origin=" + (origin.Length > 0 ? origin : "-") + " -> " + status);
+                byte[] bytes = Encoding.UTF8.GetBytes(answer);
+                byte[] reply = Encoding.ASCII.GetBytes("HTTP/1.1 " + status + "\r\n"
+                    + (bytes.Length > 0 ? "Content-Type: application/json\r\n" : "")
+                    + "Content-Length: " + bytes.Length + "\r\nConnection: close\r\n\r\n");
                 s.Write(reply, 0, reply.Length);
+                if (bytes.Length > 0) s.Write(bytes, 0, bytes.Length);
             }
         }
         catch { }
@@ -842,6 +849,26 @@ public class TaskBoard
      * sight, but a run seen on screen or in a Brave tab is reported there
      * first, and sooner, so the account's report folds into that row.
      * -------------------------------------------------------------- */
+
+    // What the extension asks before it checks claude.ai: is the Claude app
+    // open, and is any Claude run going or out of sight. Closed and idle, it
+    // does not check at all; open and idle, every two minutes; busy, every
+    // half minute.
+    string ClaudeState()
+    {
+        bool app = false, busy = false;
+        foreach (Process p in Process.GetProcessesByName("claude"))
+            if (p.MainWindowHandle != IntPtr.Zero) { app = true; break; }
+        AppWatch w;
+        if (watches.TryGetValue("claude", out w) && w.Running) busy = true;
+        lock (gate)
+            foreach (TaskItem it in items.Values)
+                if (it.App == "claude" && !(it.Source ?? "").StartsWith("Claude Code")
+                    && (it.State == "working" || it.State == "hidden" || it.State == "needs")
+                    && (DateTime.Now - it.Updated).TotalHours < 3)
+                { busy = true; break; }
+        return "{\"app\":" + (app ? "true" : "false") + ",\"busy\":" + (busy ? "true" : "false") + "}";
+    }
 
     readonly System.Collections.Concurrent.ConcurrentQueue<Dictionary<string, object>> accountQueue =
         new System.Collections.Concurrent.ConcurrentQueue<Dictionary<string, object>>();

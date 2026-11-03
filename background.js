@@ -30,11 +30,24 @@ chrome.runtime.onMessage.addListener((msg) => {
  * desktop app, a Brave tab or a phone alike, and Cowork tasks, which sit in
  * the same list.
  *
- * Every 30 seconds, the shortest an alarm allows, this reads the ten most
- * recent conversations with your claude.ai sign-in and tells the board what
- * changed: each conversation's name, state and address, nothing from inside
- * it. Nothing happens while Brave is closed or you are signed out.
+ * It reads the ten most recent conversations with your claude.ai sign-in and
+ * tells the board what changed: each conversation's name, state and address,
+ * nothing from inside it. How often depends on what the board says first:
+ * every 30 seconds, the shortest an alarm allows, while a Claude run is going
+ * or out of sight; every two minutes while the Claude app is open and quiet;
+ * not at all while it is closed and nothing runs, or the board is not
+ * running. Nothing happens while Brave is closed or you are signed out.
  */
+const QUIET_CHECK_MS = 115000;
+
+async function claudeState() {
+  try {
+    const r = await fetch('http://127.0.0.1:47823/claude-state', { headers: { 'X-Prompt-Advisor': '1' } });
+    return r.ok ? await r.json() : null;
+  } catch (e) {
+    return null;
+  }
+}
 const CLAUDE = 'https://claude.ai';
 const JSON_ONLY = { accept: 'application/json' };
 
@@ -59,6 +72,14 @@ async function pollClaude() {
   if (polling) return;
   polling = true;
   try {
+    const state = await claudeState();
+    if (!state) return;
+    if (!state.busy) {
+      if (!state.app) return;
+      const kept = await chrome.storage.session.get('claudeCheckedAt');
+      if (Date.now() - (kept.claudeCheckedAt || 0) < QUIET_CHECK_MS) return;
+    }
+    await chrome.storage.session.set({ claudeCheckedAt: Date.now() });
     const org = await claudeOrg();
     if (!org) return;
     const r = await fetch(`${CLAUDE}/api/organizations/${org}/chat_conversations?limit=10`,
@@ -102,8 +123,9 @@ async function compare(list) {
       if (state !== was.state) report(c, state, run);
     } else if (busy) {
       report(c, 'done', run);
-    } else if (settled && settled !== was.settled && Date.parse(settled) > primedAt) {
-      // Started and finished between two looks.
+    } else if (settled && settled !== was.settled && Date.parse(settled) > Math.max(primedAt, Date.now() - 180000)) {
+      // Started and finished between two looks. After a long pause in
+      // checking, only a finish from the last three minutes is still news.
       report(c, 'done', settled);
     }
   }
