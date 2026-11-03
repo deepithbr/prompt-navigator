@@ -275,10 +275,6 @@ class AdvisorContext : ApplicationContext
         menu.MenuItems.Add(about);
         menu.MenuItems.Add("-");
         menu.MenuItems.Add("Tasks", delegate { if (board != null) board.Show(); });
-        // The ChatGPT desktop app shares nothing about a chat while its window
-        // is out of sight. ChatGPT in a Brave app window is followed by the
-        // extension instead, minimized or not.
-        menu.MenuItems.Add("Open ChatGPT in a tracked window", delegate { OpenInBrave("https://chatgpt.com/"); });
         // The pet: shown only while a task runs or waits on you, always, or never.
         MenuItem petItem = new MenuItem("Pet");
         MenuItem petAuto = new MenuItem("Show while a task runs");
@@ -315,27 +311,6 @@ class AdvisorContext : ApplicationContext
         worker = new Thread(Loop);
         worker.IsBackground = true;
         worker.Start();
-    }
-
-    // A site in its own Brave window, with no tabs or address bar, where the
-    // extension runs as it does in a tab.
-    void OpenInBrave(string url)
-    {
-        string brave = null;
-        try
-        {
-            using (Microsoft.Win32.RegistryKey k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\brave.exe"))
-                if (k != null) brave = k.GetValue("") as string;
-        }
-        catch { }
-        if (string.IsNullOrEmpty(brave) || !File.Exists(brave))
-            brave = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"BraveSoftware\Brave-Browser\Application\brave.exe");
-        if (!File.Exists(brave))
-        {
-            tray.ShowBalloonTip(5000, "Brave not found", "Install Brave with the Prompt Navigator extension to track ChatGPT chats.", ToolTipIcon.None);
-            return;
-        }
-        try { Process.Start(brave, "--app=" + url); } catch { }
     }
 
     // The first version number on the line that holds the marker.

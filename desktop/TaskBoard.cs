@@ -396,6 +396,7 @@ public class TaskBoard
             string state = what == "start" ? "working" : what == "needs" ? "needs" : "done";
             if (what == "needs" && Str(d, "message").Length > 0) title = title + " \u00B7 " + Short(Str(d, "message"), 50);
             Upsert("cc:" + sid, source, title, state, "", "claude", false);
+            if (what != "start") claudeCodeSaidAt = DateTime.Now;
             return;
         }
 
@@ -767,6 +768,11 @@ public class TaskBoard
 
     long toastSeen = -1;
     DateTime claudeSeenDone = DateTime.MinValue;
+    // When a Claude Code hook last reported a turn ending or needing you.
+    volatile object claudeCodeSaidAtBox = DateTime.MinValue;
+    DateTime claudeCodeSaidAt { get { return (DateTime)claudeCodeSaidAtBox; } set { claudeCodeSaidAtBox = value; } }
+    // Session notifications wait a few seconds for a hook to claim them.
+    readonly List<KeyValuePair<DateTime, KeyValuePair<long, string>>> heldToasts = new List<KeyValuePair<DateTime, KeyValuePair<long, string>>>();
     static readonly Regex ToastText = new Regex("<text[^>]*>([^<]*)</text>");
 
     void ScanClaudeToasts()
@@ -784,11 +790,27 @@ public class TaskBoard
         if (toastSeen < 0) toastSeen = 0;
         if (!primed) return;
 
+        // A notification with a session header comes from a Code session or
+        // a Cowork task, which look the same in the store. Code sessions
+        // also report through their hooks; Cowork tasks do not. So each is
+        // held for five seconds, and dropped if a hook spoke in that time.
+        DateTime now = DateTime.Now;
         foreach (KeyValuePair<long, string> r in rows)
+            if (r.Value.Contains("<header id=\"session-")) heldToasts.Add(new KeyValuePair<DateTime, KeyValuePair<long, string>>(now, r));
+        List<KeyValuePair<long, string>> ready = new List<KeyValuePair<long, string>>();
+        foreach (KeyValuePair<long, string> r in rows)
+            if (!r.Value.Contains("<header id=\"session-")) ready.Add(r);
+        for (int i = heldToasts.Count - 1; i >= 0; i--)
         {
-            // A Code session's notification carries a header naming the
-            // session; its hooks already reported it, with your prompt.
-            if (r.Value.Contains("<header id=\"session-")) continue;
+            DateTime at = heldToasts[i].Key;
+            if ((now - at).TotalSeconds < 5) continue;
+            if (Math.Abs((claudeCodeSaidAt - at).TotalSeconds) > 20) ready.Add(heldToasts[i].Value);
+            heldToasts.RemoveAt(i);
+        }
+
+        foreach (KeyValuePair<long, string> r in ready)
+        {
+            bool cowork = r.Value.Contains("<header id=\"session-");
             Match m = ToastText.Match(r.Value);
             string title = m.Success ? Short(WebUtility.HtmlDecode(m.Groups[1].Value), 70) : "";
             if (title.Length == 0) title = "Claude app · chat";
@@ -804,7 +826,7 @@ public class TaskBoard
                 w.Blind = false;
             }
             else if ((DateTime.Now - claudeSeenDone).TotalSeconds < 30) continue;
-            Upsert(key, "Claude app", title, "done", "", "claude", InFront("claude"));
+            Upsert(key, cowork ? "Claude Cowork" : "Claude app", title, "done", "", "claude", InFront("claude"));
         }
     }
 
