@@ -368,6 +368,10 @@ public class TaskBoard
         {
             // From the Brave extension: { source, id, title, state, url, visible }
             string source = Str(d, "source");
+            // claude.ai's own view of a chat, from the extension's background
+            // check. It is matched against the screen watcher's rows, so it is
+            // handled on the watcher's thread.
+            if (source == "claude-account") { accountQueue.Enqueue(d); return; }
             string label = source == "claude-web" ? "Claude in Brave" : source == "chatgpt-web" ? "ChatGPT in Brave" : source;
             bool visible = Str(d, "visible").ToLowerInvariant() == "true";
             Upsert("web:" + Str(d, "id"), label, Short(Str(d, "title"), 70), Str(d, "state"), Str(d, "url"), "brave", visible);
@@ -437,6 +441,7 @@ public class TaskBoard
         {
             try { WatchOne("claude", "Claude app"); } catch { }
             try { ScanClaudeToasts(); } catch (Exception e) { Log("claude toasts: " + e.Message); }
+            try { Dictionary<string, object> d; while (accountQueue.TryDequeue(out d)) AccountEvent(d); } catch (Exception e) { Log("claude account: " + e.Message); }
             // Codex before ChatGPT, so a Codex or Work run the files already
             // know about is not listed a second time from the app's screen.
             try { ScanCodex(); } catch (Exception e) { Log("codex watch: " + e.Message); }
@@ -828,6 +833,59 @@ public class TaskBoard
             else if ((DateTime.Now - claudeSeenDone).TotalSeconds < 30) continue;
             Upsert(key, cowork ? "Claude Cowork" : "Claude app", title, "done", "", "claude", InFront("claude"));
         }
+    }
+
+    /* -------------------------------------------------------------- *
+     * Claude chats and Cowork tasks as claude.ai sees them, reported by
+     * the extension's background check every 30 seconds. They are the
+     * only sign of a run that finishes while the desktop app is out of
+     * sight, but a run seen on screen or in a Brave tab is reported there
+     * first, and sooner, so the account's report folds into that row.
+     * -------------------------------------------------------------- */
+
+    readonly System.Collections.Concurrent.ConcurrentQueue<Dictionary<string, object>> accountQueue =
+        new System.Collections.Concurrent.ConcurrentQueue<Dictionary<string, object>>();
+
+    void AccountEvent(Dictionary<string, object> d)
+    {
+        string key = "acct:" + Str(d, "id");
+        string title = Short(Str(d, "title"), 70);
+        string state = Str(d, "state");
+        if (state != "working" && state != "needs" && state != "done") return;
+
+        // The run the Claude app's screen watcher is following, if any.
+        AppWatch w;
+        TaskItem twin = null;
+        if (watches.TryGetValue("claude", out w) && w.Running && w.Key != null)
+            lock (gate) items.TryGetValue(w.Key, out twin);
+        // Or a Brave tab or app row with the same chat name, recently.
+        if (twin == null)
+            lock (gate)
+                foreach (TaskItem it in items.Values)
+                    if (!it.Key.StartsWith("acct:") && (it.Source == "Claude app" || it.Source == "Claude in Brave")
+                        && string.Equals(it.Title, title, StringComparison.OrdinalIgnoreCase)
+                        && (it.State == "working" || it.State == "hidden" || (DateTime.Now - it.Updated).TotalMinutes < 3))
+                    { twin = it; break; }
+
+        if (twin != null)
+        {
+            // Out of sight on screen, finished on claude.ai: this is the news.
+            if (state == "done" && (twin.State == "working" || twin.State == "hidden"))
+            {
+                if (w != null && w.Key == twin.Key) { w.Running = false; w.Blind = false; }
+                Upsert(twin.Key, twin.Source, title, "done", "", twin.App, InFront("claude"));
+            }
+            // Either way the twin carries it; a row of the account's own,
+            // made before the twin appeared, goes.
+            bool dropped;
+            lock (gate) dropped = items.Remove(key);
+            if (dropped) { Save(); Refresh(); }
+            return;
+        }
+
+        // Finished on screen in the last minute and a half, in front of you.
+        if (state == "done" && (DateTime.Now - claudeSeenDone).TotalSeconds < 90) return;
+        Upsert(key, "Claude", title, state, Str(d, "url"), "claude", state == "done" && InFront("claude"));
     }
 
     // What you typed, without what the Claude desktop app wraps around it:

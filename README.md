@@ -80,7 +80,7 @@ Left-click the tray icon for one list of every Claude and ChatGPT task on the PC
 |---|---|
 | Claude Code, desktop app and terminal | Three hooks in `~/.claude/settings.json`: a prompt starting, Claude stopping, and a permission request. Every session, titled with what you last typed and the project folder beside it |
 | Claude and ChatGPT in Brave | The extension's `task-reporter.js` sees the site's Stop button appear and go, and its background script passes that to the board. |
-| Claude app (Chat and Cowork) | The board watches the app's Stop button while the window is in sight, titled with the open chat's name. A chat that finishes while the window is minimized or covered is caught from the Windows notification Claude posts for it, so Claude's notifications must stay on |
+| Claude app (Chat and Cowork) | The board watches the app's Stop button while the window is in sight, titled with the open chat's name. A chat or Cowork task that finishes while the window is minimized or covered is caught by the extension instead: every 30 seconds its background script reads your ten latest claude.ai conversations, whose live status, needs-input flag and last-finished time claude.ai keeps for each. That works for a chat sent from any device, needs Brave open and signed in to claude.ai, and can be up to 30 seconds late. A run already seen on screen or in a tab is not listed twice |
 | ChatGPT app, Codex and Work | Read from the session files Codex writes under `~/.codex/sessions` as a run starts and ends, minimized or not, titled with the thread's name |
 | ChatGPT app, Chat | The board watches the Stop button while the window is in sight. A chat whose window goes out of sight is marked hidden, because the app freezes its screen and posts no notification for chats |
 
@@ -126,7 +126,7 @@ By default the core only appears when there is something to show. It fades in wh
 4. Click **Load unpacked** and choose the repository folder
 5. Reload any open Claude or ChatGPT tab
 
-One permission is requested, and it points at your own PC: `http://127.0.0.1:47823/*`, so the extension can tell the desktop task board when a reply finishes. It declares no other `permissions` or `host_permissions`, and its content scripts only run on the sites listed in the manifest.
+Three permissions are requested. `http://127.0.0.1:47823/*` points at your own PC, so the extension can tell the desktop task board when a reply finishes. `https://claude.ai/*` lets its background script read your ten latest conversations' names and states every 30 seconds, with your own claude.ai sign-in, so a chat finishing in the minimized desktop app is still noticed; it reads nothing from inside a conversation. `alarms` and `storage` time that check and remember what it saw last. Its content scripts only run on the sites listed in the manifest.
 
 ## Install as userscripts instead
 
