@@ -10,7 +10,7 @@
 //
 // By default it only appears when there is something to show: it fades in
 // when a task starts or finishes, and fades out once nothing has run and
-// nothing has waited on you for two minutes. "Always" keeps it on screen and
+// nothing has waited on you for 30 seconds. "Always" keeps it on screen and
 // "Never" keeps it away; the tray menu's Pet item picks between the three.
 //
 // The window is a layered window drawn with per-pixel alpha, so only the core
@@ -63,7 +63,7 @@ public class PetForm : Form
     // "auto" shows it only while something is running or waiting on you,
     // "always" keeps it on screen, "off" never shows it.
     public string Mode = "auto";
-    const double IdleHide = 120;
+    const double IdleHide = 30;
     double lastBusy = -1000;
     float fade = 1f;
     bool leaving, snoozed;
@@ -217,7 +217,7 @@ public class PetForm : Form
         Render();
     }
 
-    // Each tick: in "auto", start leaving once idle for two minutes; then
+    // Each tick: in "auto", start leaving once idle for 30 seconds; then
     // move the fade a step toward where it is heading.
     void Fade()
     {
