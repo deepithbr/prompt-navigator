@@ -124,7 +124,16 @@ public class PetForm : Form
         board.Alerted += delegate (TaskItem it) { if (IsHandleCreated) BeginInvoke((Action)delegate { Alert(it); }); };
 
         tick.Interval = 50;
-        tick.Tick += delegate { Fade(); if (Visible) Render(); };
+        tick.Tick += delegate
+        {
+            Fade();
+            if (Visible) Render();
+            // Twenty frames a second only while something moves fast: a
+            // fade, the gold burst, a red pulse. Spinning and glowing read
+            // the same at ten, for half the drawing.
+            int want = Lively() ? 50 : 100;
+            if (tick.Interval != want) tick.Interval = want;
+        };
         Load_();
     }
 
@@ -178,6 +187,13 @@ public class PetForm : Form
     }
 
     bool Busy() { return working > 0 || alerts.Count > 0 || flash != null; }
+
+    bool Lively()
+    {
+        return leaving || fade < 1 || flash != null
+            || clock.Elapsed.TotalSeconds - alertAt < 3.5
+            || alerts.Exists(delegate (TaskItem a) { return a.State == "needs"; });
+    }
 
     // Fade in, from wherever it was.
     void Present()
