@@ -1,15 +1,15 @@
-// The desk pet: a small fighter in a corner of the screen that shows what
+// The desk pet: a fighter's face in a corner of the screen that shows what
 // the task board knows without opening it.
 //
-// He stands with his arms crossed and his eyes shut while nothing runs. While
-// any Claude or ChatGPT task works, a blue aura burns around him. When one
-// finishes it flares gold, and when one needs you it pulses red, with a bubble
-// naming the task. The bubble stays until you click him, which brings that
+// His eyes stay shut while nothing runs. While any Claude or ChatGPT task
+// works, a blue aura burns around him and his war marks glow. When one
+// finishes the aura flares gold and his eyes blaze, and when one needs you it
+// all burns red, with a bubble naming the task. The bubble stays until you click him, which brings that
 // task's app forward. A tray balloon was the only signal before, and Windows
 // hides those under Do not disturb and drops them after a few seconds.
 //
 // The window is a layered window drawn with per-pixel alpha, so only the
-// fighter and his bubble catch the mouse and everything around them clicks
+// face and his bubble catch the mouse and everything around them clicks
 // through.
 
 using System;
@@ -28,18 +28,15 @@ public class PetForm : Form
 {
     enum Mood { Resting, Working, Done, Needs }
 
-    // The canvas, in pixels at 100% scaling. The fighter stands bottom right
+    // The canvas, in pixels at 100% scaling. His face sits bottom right
     // and the bubble sits above him, so the window can hug the screen corner.
-    const int W = 300, H = 200, Stand = 84;
+    const int W = 300, H = 200, Span = 84;
 
-    static readonly Color Skin = Color.FromArgb(232, 190, 154);
-    static readonly Color Hair = Color.FromArgb(30, 26, 34);
-    static readonly Color Coat = Color.FromArgb(52, 56, 70);
-    static readonly Color Sleeve = Color.FromArgb(64, 69, 86);
-    static readonly Color Trousers = Color.FromArgb(38, 40, 50);
-    static readonly Color Boots = Color.FromArgb(70, 46, 36);
-    static readonly Color Band = Color.FromArgb(182, 38, 42);
-    static readonly Color Belt = Color.FromArgb(196, 152, 62);
+    static readonly Color Skin = Color.FromArgb(226, 184, 148);
+    static readonly Color Hair = Color.FromArgb(28, 24, 32);
+    static readonly Color Scarf = Color.FromArgb(178, 36, 40);
+    static readonly Color ScarfDark = Color.FromArgb(142, 26, 32);
+    static readonly Color Mark = Color.FromArgb(150, 40, 44);
     static readonly Color Ink = Color.FromArgb(18, 16, 22);
     static readonly Color Blue = Color.FromArgb(91, 157, 187);
     static readonly Color Gold = Color.FromArgb(255, 200, 70);
@@ -293,18 +290,13 @@ public class PetForm : Form
             shake = (float)Math.Sin(t * 53) * 0.8f;
         }
 
-        float cx = W - 8 - Stand / 2f + shake, ground = H - 8;
-
-        using (SolidBrush b = new SolidBrush(Color.FromArgb(70, 0, 0, 0)))
-        {
-            float sw = 40 * (1 - lift / 30f);
-            g.FillEllipse(b, cx - sw / 2, ground - 4, sw, 7);
-        }
+        float cx = W - 8 - Span / 2f + shake, ground = H - 8;
 
         GraphicsState saved = g.Save();
         g.TranslateTransform(cx, ground - 2 - lift);
         if (aura != Color.Empty) DrawAura(g, t, aura, power);
-        DrawFighter(g, t, mood);
+        if (mood == Mood.Needs || (mood == Mood.Done && since < 3)) DrawSparks(g, t, aura, power);
+        DrawFace(g, t, mood, aura);
         g.Restore(saved);
 
         float top = ground - 2 - lift - 112;
@@ -319,7 +311,7 @@ public class PetForm : Form
         for (int layer = 0; layer < 2; layer++)
         {
             float s = layer == 0 ? 1f : 0.74f;
-            float rx = 36 * power * s, ry = 56 * power * s, cy = -50;
+            float rx = 40 * power * s, ry = 52 * power * s, cy = -62;
             PointF[] pts = new PointF[56];
             for (int i = 0; i < pts.Length; i++)
             {
@@ -336,117 +328,217 @@ public class PetForm : Form
         }
     }
 
-    // Origin at his feet, y going up as it goes negative.
-    void DrawFighter(Graphics g, double t, Mood mood)
+    // A close-up of his head, origin below the scarf, y going up as it goes
+    // negative. At rest his eyes are shut. With his power up the war marks on
+    // his cheeks and brow light in the aura's colour, and when a task finishes
+    // or needs you his eyes blaze with it too.
+    void DrawFace(Graphics g, double t, Mood mood, Color aura)
     {
-        bool charged = mood != Mood.Resting;
-        using (Pen line = new Pen(Ink, 1.6f))
+        bool blazing = mood == Mood.Done || mood == Mood.Needs;
+        float wind = mood == Mood.Resting ? 0.3f : 1f;
+        using (Pen line = new Pen(Ink, 1.5f))
         using (SolidBrush ink = new SolidBrush(Ink))
         using (SolidBrush skin = new SolidBrush(Skin))
+        using (SolidBrush shade = new SolidBrush(Color.FromArgb(55, 40, 10, 20)))
         {
             line.LineJoin = LineJoin.Round;
 
-            // Legs, planted apart, and boots.
-            using (SolidBrush b = new SolidBrush(Trousers))
+            // The topknot's tail and the scarf's ends stream out behind him.
+            float sway = (float)Math.Sin(t * (1.5 + 5 * wind)) * 3 * wind;
+            using (Pen tail = new Pen(Hair, 3.2f))
             {
-                g.FillRectangle(b, -12, -36, 10, 28); g.DrawRectangle(line, -12, -36, 10, 28);
-                g.FillRectangle(b, 2, -36, 10, 28); g.DrawRectangle(line, 2, -36, 10, 28);
+                tail.StartCap = tail.EndCap = LineCap.Round;
+                g.DrawBezier(tail, 6, -106, 16, -110 + sway, 24, -104 - sway, 32, -100 + sway);
+                g.DrawBezier(tail, 6, -104, 14, -104 - sway, 20, -96 + sway, 27, -92 - sway);
             }
-            using (SolidBrush b = new SolidBrush(Boots))
+            PointF[] ribbon = Ribbon(t, wind, 14, -20);
+            using (SolidBrush b = new SolidBrush(ScarfDark)) g.FillPolygon(b, ribbon);
+            g.DrawPolygon(line, ribbon);
+
+            // Neck.
+            g.FillRectangle(skin, -9, -40, 18, 22);
+            g.FillRectangle(shade, -9, -40, 6, 22);
+            g.DrawLine(line, -9, -40, -9, -20);
+            g.DrawLine(line, 9, -40, 9, -20);
+
+            // Ears, then the face: a long, angular jaw.
+            g.FillEllipse(skin, -26, -67, 7, 13); g.DrawEllipse(line, -26, -67, 7, 13);
+            g.FillEllipse(skin, 19, -67, 7, 13); g.DrawEllipse(line, 19, -67, 7, 13);
+            PointF[] face =
             {
-                RectangleF l = new RectangleF(-15, -10, 14, 10), r = new RectangleF(1, -10, 14, 10);
-                using (GraphicsPath p = Rounded(l, 3)) { g.FillPath(b, p); g.DrawPath(line, p); }
-                using (GraphicsPath p = Rounded(r, 3)) { g.FillPath(b, p); g.DrawPath(line, p); }
-            }
+                new PointF(-22, -84), new PointF(22, -84), new PointF(21.5f, -63), new PointF(16, -46),
+                new PointF(7, -36.5f), new PointF(0, -35), new PointF(-7, -36.5f), new PointF(-16, -46), new PointF(-21.5f, -63)
+            };
+            g.FillClosedCurve(skin, face, FillMode.Alternate, 0.25f);
+            PointF[] cheek = { new PointF(-22, -82), new PointF(-12, -82), new PointF(-8, -50), new PointF(-7, -36.5f), new PointF(-16, -46), new PointF(-21.5f, -63) };
+            g.FillClosedCurve(shade, cheek, FillMode.Alternate, 0.25f);
+            g.DrawClosedCurve(line, face, 0.25f, FillMode.Alternate);
 
-            // Coat, shoulders wider than the waist, with a belt.
-            PointF[] coat = { new PointF(-19, -66), new PointF(19, -66), new PointF(14, -32), new PointF(-14, -32) };
-            using (SolidBrush b = new SolidBrush(Coat)) g.FillPolygon(b, coat);
-            g.DrawPolygon(line, coat);
-            using (SolidBrush b = new SolidBrush(Belt)) g.FillRectangle(b, -14.5f, -38, 29, 5);
-            g.DrawRectangle(line, -14.5f, -38, 29, 5);
+            // The scarf wound round his neck.
+            RectangleF wrap = new RectangleF(-17, -26, 34, 13);
+            using (GraphicsPath p = Rounded(wrap, 6))
+            using (SolidBrush b = new SolidBrush(Scarf)) { g.FillPath(b, p); g.DrawPath(line, p); }
+            g.DrawLine(line, -10, -24, -6, -15);
+            g.DrawLine(line, 2, -25, 6, -15);
 
-            // Arms crossed over the chest.
-            using (SolidBrush b = new SolidBrush(Sleeve))
-            {
-                g.FillEllipse(b, -25, -67, 11, 24); g.DrawEllipse(line, -25, -67, 11, 24);
-                g.FillEllipse(b, 14, -67, 11, 24); g.DrawEllipse(line, 14, -67, 11, 24);
-                RectangleF bar = new RectangleF(-22, -56, 44, 11);
-                using (GraphicsPath p = Rounded(bar, 5)) { g.FillPath(b, p); g.DrawPath(line, p); }
-            }
-            g.FillEllipse(skin, -21, -58, 9, 8); g.DrawEllipse(line, -21, -58, 9, 8);
-            g.FillEllipse(skin, 12, -54, 9, 8); g.DrawEllipse(line, 12, -54, 9, 8);
-
-            // Neck and head.
-            g.FillRectangle(skin, -4, -71, 8, 7);
-            g.DrawLine(line, -4, -71, -4, -65); g.DrawLine(line, 4, -71, 4, -65);
-            g.FillEllipse(skin, -12, -94, 24, 26);
-            g.DrawEllipse(line, -12, -94, 24, 26);
-
-            // Hair swept up in spikes, which stir when his power is up.
-            float stir = charged ? (float)Math.Sin(t * 13) * 0.8f : 0;
+            // Hair swept straight back into a topknot, a few locks falling forward.
             PointF[] hair =
             {
-                new PointF(-13, -80), new PointF(-21, -93 + stir), new PointF(-13, -94),
-                new PointF(-15, -108 + stir), new PointF(-6, -98), new PointF(-3, -117 - stir),
-                new PointF(3, -100), new PointF(11, -114 + stir), new PointF(10, -98),
-                new PointF(20, -106 - stir), new PointF(13, -91), new PointF(21, -88 + stir),
-                new PointF(13, -80), new PointF(10, -87), new PointF(4, -85),
-                new PointF(-1, -89), new PointF(-6, -85), new PointF(-11, -87)
+                new PointF(-24, -66), new PointF(-25, -84), new PointF(-18, -98), new PointF(-4, -104),
+                new PointF(10, -103), new PointF(22, -96), new PointF(25, -84), new PointF(24, -66),
+                new PointF(20, -76), new PointF(15, -80), new PointF(10, -77), new PointF(5, -82),
+                new PointF(-2, -73), new PointF(-4, -81), new PointF(-11, -79), new PointF(-17, -82), new PointF(-20, -74)
             };
             using (SolidBrush b = new SolidBrush(Hair)) g.FillPolygon(b, hair);
             g.DrawPolygon(line, hair);
+            using (SolidBrush b = new SolidBrush(Hair)) g.FillEllipse(b, -3, -116, 13, 12);
+            g.DrawEllipse(line, -3, -116, 13, 12);
+            using (SolidBrush b = new SolidBrush(Scarf)) g.FillRectangle(b, -1, -106, 9, 3);
 
-            // Headband, its tails trailing to one side.
-            using (SolidBrush b = new SolidBrush(Band)) g.FillRectangle(b, -12, -87, 24, 4);
-            float wave = (float)Math.Sin(t * (charged ? 6 : 1.5)) * (charged ? 3 : 1);
-            using (Pen tail = new Pen(Band, 2.4f))
+            // Light from the aura catches the far edge of his hair, face and neck.
+            if (aura != Color.Empty)
+                using (Pen rim = new Pen(Color.FromArgb(blazing ? 230 : 160, aura), 1.6f))
+                {
+                    rim.StartCap = rim.EndCap = LineCap.Round;
+                    g.DrawCurve(rim, new PointF[] { new PointF(10, -103), new PointF(22, -96), new PointF(25, -84) }, 0.5f);
+                    g.DrawCurve(rim, new PointF[] { new PointF(21.5f, -63), new PointF(16, -46), new PointF(7, -36.5f) }, 0.5f);
+                    g.DrawLine(rim, 9.5f, -39, 9.5f, -27);
+                }
+
+            // War marks: two strokes down each cheek and one on the brow.
+            // Dark red at rest, lit in the aura's colour once his power is up.
+            Color markColour = aura == Color.Empty ? Mark : Blend(aura, Color.White, blazing ? 0.45f : 0.15f);
+            if (aura != Color.Empty)
             {
-                tail.StartCap = tail.EndCap = LineCap.Round;
-                g.DrawBezier(tail, 12, -85, 18, -86, 22, -82 + wave, 28, -80 + wave);
-                g.DrawBezier(tail, 12, -84, 17, -81, 20, -76 - wave, 25, -73 - wave);
+                float glow = blazing ? 1f : 0.6f + 0.25f * (float)Math.Sin(t * 4);
+                using (Pen halo = new Pen(Color.FromArgb((int)(110 * glow), aura), 5f))
+                {
+                    halo.StartCap = halo.EndCap = LineCap.Round;
+                    Marks(g, halo);
+                }
+            }
+            using (Pen mark = new Pen(markColour, 1.8f))
+            {
+                mark.StartCap = mark.EndCap = LineCap.Round;
+                Marks(g, mark);
             }
 
-            // The face. Brows always set hard; the eyes and mouth carry the mood.
-            using (Pen brow = new Pen(Ink, 1.8f))
+            // Brows: heavy, set hard, steeper when something needs you.
+            float steep = mood == Mood.Needs ? 5f : 3f;
+            PointF[] browL = { new PointF(-17, -69 - steep), new PointF(-4, -66), new PointF(-4, -63.6f), new PointF(-17, -66.5f - steep) };
+            PointF[] browR = { new PointF(17, -69 - steep), new PointF(4, -66), new PointF(4, -63.6f), new PointF(17, -66.5f - steep) };
+            g.FillPolygon(ink, browL);
+            g.FillPolygon(ink, browR);
+
+            // Eyes.
+            if (mood == Mood.Resting)
             {
-                brow.StartCap = brow.EndCap = LineCap.Round;
-                float steep = mood == Mood.Needs ? 2.6f : 1.6f;
-                g.DrawLine(brow, -9, -81 - steep, -3, -80);
-                g.DrawLine(brow, 3, -80, 9, -81 - steep);
-
-                if (mood == Mood.Resting)
+                using (Pen lid = new Pen(Ink, 1.8f))
                 {
-                    g.DrawLine(brow, -8, -77.5f, -4, -77);
-                    g.DrawLine(brow, 4, -77, 8, -77.5f);
+                    lid.StartCap = lid.EndCap = LineCap.Round;
+                    g.DrawLine(lid, -15, -59.5f, -6, -58.5f);
+                    g.DrawLine(lid, 6, -58.5f, 15, -59.5f);
                 }
-                else
+            }
+            else
+            {
+                float open = mood == Mood.Needs ? 5.5f : 4.2f;
+                if (mood == Mood.Working && (t % 4.3) < 0.1) open = 0.8f;
+                foreach (int side in new int[] { -1, 1 })
                 {
-                    float open = mood == Mood.Needs ? 3.4f : 2.4f;
-                    // A blink now and then while he works.
-                    if (mood == Mood.Working && (t % 4.3) < 0.1) open = 0.6f;
-                    g.FillEllipse(Brushes.White, -8.5f, -78.5f, 5.5f, open);
-                    g.FillEllipse(Brushes.White, 3, -78.5f, 5.5f, open);
-                    float look = mood == Mood.Working ? (float)Math.Sin(t * 0.8) * 1.2f : 0;
-                    g.FillEllipse(ink, -6.6f + look, -78.6f, 2.2f, open + 0.2f);
-                    g.FillEllipse(ink, 4.6f + look, -78.6f, 2.2f, open + 0.2f);
+                    PointF[] eye =
+                    {
+                        new PointF(side * 15.5f, -59.5f), new PointF(side * 11, -59.5f - open * 0.6f),
+                        new PointF(side * 5.5f, -59f), new PointF(side * 10, -59.5f + open * 0.4f)
+                    };
+                    if (blazing)
+                    {
+                        // No pupils, only light.
+                        using (SolidBrush halo = new SolidBrush(Color.FromArgb(120, aura)))
+                            g.FillEllipse(halo, side * 10.5f - 8, -64, 16, 10);
+                        using (SolidBrush b = new SolidBrush(Blend(aura, Color.White, 0.55f)))
+                            g.FillClosedCurve(b, eye, FillMode.Alternate, 0.3f);
+                    }
+                    else
+                    {
+                        g.FillClosedCurve(Brushes.White, eye, FillMode.Alternate, 0.3f);
+                        float look = (float)Math.Sin(t * 0.8) * 1.6f;
+                        g.FillEllipse(ink, side * 10 - 1.8f + look, -59.5f - open * 0.5f, 3.6f, open);
+                    }
+                    g.DrawClosedCurve(line, eye, 0.3f, FillMode.Alternate);
                 }
+            }
 
+            // Nose and mouth.
+            g.DrawLine(line, 0.5f, -55, 2.5f, -48.5f);
+            g.DrawLine(line, 2.5f, -48.5f, -0.5f, -48);
+            using (Pen lip = new Pen(Ink, 1.6f))
+            {
+                lip.StartCap = lip.EndCap = LineCap.Round;
                 if (mood == Mood.Done)
-                {
-                    // The smirk: one corner up.
-                    g.DrawBezier(brow, -3, -72, 0, -72, 2, -72.2f, 4, -74);
-                }
+                    g.DrawBezier(lip, -5, -42.5f, -1, -42.5f, 3, -42.8f, 6, -45.5f);
                 else if (mood == Mood.Needs)
                 {
-                    g.FillEllipse(ink, -2.5f, -73.5f, 5, 3);
+                    g.FillRectangle(Brushes.White, -5, -44, 10, 3);
+                    g.DrawRectangle(lip, -5, -44, 10, 3);
+                    g.DrawLine(line, -5, -42.5f, 5, -42.5f);
                 }
                 else
-                {
-                    g.DrawLine(brow, -2.5f, -72, 2.5f, -72.4f);
-                }
+                    g.DrawLine(lip, -4.5f, -42.5f, 4.5f, -43);
             }
         }
+    }
+
+    static void Marks(Graphics g, Pen p)
+    {
+        g.DrawLine(p, -12, -54, -14, -47);
+        g.DrawLine(p, -8.5f, -54, -10.5f, -47);
+        g.DrawLine(p, 12, -54, 14, -47);
+        g.DrawLine(p, 8.5f, -54, 10.5f, -47);
+        g.DrawLine(p, 0, -80, 0, -75);
+    }
+
+    // A strip of cloth trailing from (x, y), rippling harder in a stronger wind.
+    static PointF[] Ribbon(double t, float wind, float x0, float y0)
+    {
+        const int n = 9;
+        PointF[] pts = new PointF[n * 2];
+        for (int i = 0; i < n; i++)
+        {
+            float x = x0 + i * 4.4f;
+            float y = y0 + i * (1.8f - wind * 1.1f) + (float)Math.Sin(t * (2 + 6 * wind) - i * 0.9) * i * 0.5f * (0.4f + wind);
+            float half = 3.2f - i * 0.22f;
+            pts[i] = new PointF(x, y - half);
+            pts[n * 2 - 1 - i] = new PointF(x, y + half);
+        }
+        return pts;
+    }
+
+    // Short bolts that jump around him, a new set every eighth of a second.
+    static void DrawSparks(Graphics g, double t, Color c, float power)
+    {
+        Random r = new Random((int)(t * 8));
+        using (Pen p = new Pen(Color.FromArgb(235, Blend(c, Color.White, 0.6f)), 1.4f))
+        {
+            for (int k = 0; k < 3; k++)
+            {
+                double a = r.NextDouble() * Math.PI * 2;
+                float x = (float)Math.Cos(a) * 36 * power, y = -62 + (float)Math.Sin(a) * 46 * power;
+                PointF[] bolt = new PointF[4];
+                for (int i = 0; i < bolt.Length; i++)
+                {
+                    bolt[i] = new PointF(x, y);
+                    x += (float)(Math.Cos(a) * 5 + r.NextDouble() * 8 - 4);
+                    y += (float)(Math.Sin(a) * 5 + r.NextDouble() * 8 - 4);
+                }
+                g.DrawLines(p, bolt);
+            }
+        }
+    }
+
+    static Color Blend(Color a, Color b, float k)
+    {
+        return Color.FromArgb((int)(a.R + (b.R - a.R) * k), (int)(a.G + (b.G - a.G) * k), (int)(a.B + (b.B - a.B) * k));
     }
 
     void DrawCount(Graphics g, float cx, float top)

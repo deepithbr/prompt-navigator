@@ -99,16 +99,16 @@ If its notifications never appear, check Windows **Do not disturb**, the bell ic
 
 **The desk pet**
 
-A small fighter stands in the bottom-right corner of the screen, above the taskbar, and shows what the board knows without opening it. Do not disturb does not hide him, and he does not go away after six seconds the way a banner does.
+A fighter's face sits in the bottom-right corner of the screen, above the taskbar, and shows what the board knows without opening it. Do not disturb does not hide him, and he does not go away after six seconds the way a banner does.
 
 ![The pet resting, working on two tasks, after a finish, and when a task needs you](docs/screenshots/pet-states.png)
 
 | He shows | When |
 |---|---|
-| Arms crossed, eyes shut | Nothing is running |
-| A blue aura, with a count if more than one task runs | Any Claude or ChatGPT task is working |
-| A gold aura, a smirk and a green bubble naming the task | A task finished while you were in another app |
-| A red aura, a glare and an orange bubble | A task needs your approval or answer |
+| Eyes shut, no aura | Nothing is running |
+| A blue aura and glowing war marks, with a count if more than one task runs | Any Claude or ChatGPT task is working |
+| A gold flare with sparks, blazing eyes, a smirk and a green bubble naming the task | A task finished while you were in another app |
+| A red aura with sparks, burning eyes, gritted teeth and an orange bubble | A task needs your approval or answer |
 
 The bubble stays until you click him, which brings that task's app forward. Clicking him with no bubble opens the task list. A task that finishes in the app you are already looking at gets a four-second flare and no sound, so a Code session in front of you does not nag. Drag him anywhere; he keeps the spot. Right-click for **Tasks**, **Dismiss**, **Sound** and **Hide pet**, and bring him back from the tray menu's **Pet**. His position and sound setting live in `%LOCALAPPDATA%\PromptAdvisor\pet.txt`.
 
