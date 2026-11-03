@@ -26,6 +26,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Web.Script.Serialization;
 using System.Windows.Automation;
@@ -151,7 +152,7 @@ public class TaskBoard
         lock (gate)
         {
             List<string> gone = new List<string>();
-            foreach (TaskItem it in items.Values) if (it.State != "working" && it.State != "needs") gone.Add(it.Key);
+            foreach (TaskItem it in items.Values) if (it.State != "working" && it.State != "needs" && it.State != "hidden") gone.Add(it.Key);
             foreach (string k in gone) items.Remove(k);
         }
         Save();
@@ -184,7 +185,7 @@ public class TaskBoard
             foreach (TaskItem it in json.Deserialize<List<TaskItem>>(File.ReadAllText(store)))
             {
                 // Anything still "working" from before a restart is unknown now.
-                if (it.State == "working") it.State = "lost";
+                if (it.State == "working" || it.State == "hidden") it.State = "lost";
                 // The serializer stores UTC and hands it back as UTC.
                 it.Started = it.Started.ToLocalTime();
                 it.Updated = it.Updated.ToLocalTime();
@@ -377,18 +378,20 @@ public class TaskBoard
             string sid = Str(d, "session_id");
             if (sid.Length == 0) return;
             string title;
+            // The project folder goes beside the source, so two sessions
+            // asked the same thing in different projects can be told apart.
+            // The desktop app's own scratch folders mean no project at all.
+            string folder = Path.GetFileName(Str(d, "cwd").TrimEnd('\\', '/'));
+            string source = folder.Length > 0 && !folder.StartsWith("scratch-") ? "Claude Code \u00B7 " + folder : "Claude Code";
             lock (gate)
             {
-                if (what == "start" && Str(d, "prompt").Length > 0) sessionTitles[sid] = Short(Str(d, "prompt"), 70);
-                if (!sessionTitles.TryGetValue(sid, out title))
-                {
-                    string cwd = Str(d, "cwd");
-                    title = cwd.Length > 0 ? Path.GetFileName(cwd.TrimEnd('\\', '/')) : "session";
-                }
+                string asked = what == "start" ? CleanPrompt(Str(d, "prompt")) : "";
+                if (asked.Length > 0) sessionTitles[sid] = Short(asked, 70);
+                if (!sessionTitles.TryGetValue(sid, out title)) title = folder.Length > 0 ? folder : "Session";
             }
             string state = what == "start" ? "working" : what == "needs" ? "needs" : "done";
             if (what == "needs" && Str(d, "message").Length > 0) title = title + " \u00B7 " + Short(Str(d, "message"), 50);
-            Upsert("cc:" + sid, "Claude Code", title, state, "", "claude", false);
+            Upsert("cc:" + sid, source, title, state, "", "claude", false);
             return;
         }
 
@@ -410,16 +413,27 @@ public class TaskBoard
     /* -------------------------------------------------------------- *
      * The desktop apps: a Stop button on screen means a reply is
      * running. Its disappearing means the reply finished.
+     *
+     * Both apps are Chromium inside, and Chromium stops updating what it
+     * exposes while its window is minimized or hidden behind others: the
+     * Stop button stays frozen in place, or the page drops out of the tree.
+     * So a run is only judged while the app can be seen. Hidden mid-run,
+     * it is marked "hidden" until the window comes back.
      * -------------------------------------------------------------- */
 
-    class AppWatch { public string Key; public bool Running; }
+    class AppWatch { public string Key; public bool Running, Blind; public DateTime Since; }
     readonly Dictionary<string, AppWatch> watches = new Dictionary<string, AppWatch>();
+
+    [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
 
     void WatchApps()
     {
         while (running)
         {
             try { WatchOne("claude", "Claude app"); } catch { }
+            // Codex before ChatGPT, so a Codex or Work run the files already
+            // know about is not listed a second time from the app's screen.
+            try { ScanCodex(); } catch (Exception e) { Log("codex watch: " + e.Message); }
             try { WatchOne("ChatGPT", "ChatGPT app"); } catch { }
             Thread.Sleep(2000);
         }
@@ -432,42 +446,290 @@ public class TaskBoard
             if (x.MainWindowHandle != IntPtr.Zero) { p = x; break; }
         if (p == null) return;
         AutomationElement win = AutomationElement.FromHandle(p.MainWindowHandle);
+        string app = proc == "claude" ? "claude" : "chatgpt";
 
-        bool stop = false, codeTab = false;
-        string mode = "";
+        bool stop = false, codeTab = false, composer = false;
+        string mode = "", chat = "";
         Condition isButtonOrEdit = new OrCondition(
             new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button),
-            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
+            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit),
+            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Document));
         foreach (AutomationElement e in win.FindAll(TreeScope.Descendants, isButtonOrEdit))
         {
             string n = e.Current.Name ?? "";
+            if (e.Current.ControlType == ControlType.Document)
+            {
+                // The page's title is the open conversation's name, as in
+                // "Plan the BCA timetable - Claude". The app's own name alone
+                // means a page with no conversation open.
+                if (chat.Length == 0) chat = ChatName(n);
+                continue;
+            }
             if (n == "Stop" || n == "Stop response" || n == "Stop streaming" || n == "Stop generating")
             {
                 if (!e.Current.IsOffscreen) stop = true;
             }
             else if (proc == "claude" && n == "Prompt" && e.Current.ControlType == ControlType.Edit && !e.Current.IsOffscreen) codeTab = true;
             else if (proc == "ChatGPT" && n.StartsWith("Switch mode, current mode: ")) mode = n.Substring("Switch mode, current mode: ".Length);
+            if (e.Current.ControlType == ControlType.Edit && !e.Current.IsOffscreen) composer = true;
         }
         // The Code tab is Claude Code, which reports through its own hooks
-        // with real titles. Watching it here too would list it twice.
-        if (codeTab) stop = false;
+        // with real titles. Codex mode in the ChatGPT app reports through its
+        // session files. Watching either here too would list it twice.
+        if (codeTab || mode == "Codex") stop = false;
 
         AppWatch w;
         if (!watches.TryGetValue(proc, out w)) { w = new AppWatch(); watches[proc] = w; }
+
+        // In ChatGPT a hidden page also loses its text box, which is how a
+        // window covered by others shows itself.
+        bool seen = !IsIconic(p.MainWindowHandle) && (proc != "ChatGPT" || composer);
+        if (!seen)
+        {
+            if (w.Running && !w.Blind && w.Key != null)
+            {
+                w.Blind = true;
+                Upsert(w.Key, label, null, "hidden", "", app, true);
+            }
+            return;
+        }
+        if (w.Blind)
+        {
+            w.Blind = false;
+            if (stop && w.Key != null) Upsert(w.Key, label, null, "working", "", app, true);
+        }
+
         if (stop && !w.Running)
         {
-            w.Key = "app:" + proc + ":" + DateTime.Now.Ticks;
             w.Running = true;
-            Upsert(w.Key, label, label + (mode.Length > 0 ? " \u00B7 " + mode : "") + " \u00B7 started " + DateTime.Now.ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture), "working", "", proc == "claude" ? "claude" : "chatgpt", false);
+            w.Since = DateTime.Now;
+            w.Key = null;
+            // A Work run in ChatGPT shows the same Stop button; its session
+            // file has already said so.
+            if (proc == "ChatGPT" && CodexBusy()) return;
+            w.Key = "app:" + proc + ":" + DateTime.Now.Ticks;
+            string title = chat.Length > 0 ? chat
+                : (mode.Length > 0 ? mode + " · " : "New chat · ") + "started " + DateTime.Now.ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+            Upsert(w.Key, label, title, "working", "", app, false);
         }
         else if (!stop && w.Running)
         {
             w.Running = false;
-            // Quiet when you are already looking at that app.
-            uint fgPid;
-            GetWindowThreadProcessId(GetForegroundWindow(), out fgPid);
-            Upsert(w.Key, label, null, "done", "", proc == "claude" ? "claude" : "chatgpt", fgPid == (uint)p.Id);
+            // A new chat is named by the app once its first reply is in, so
+            // the name is read again at the end. Quiet when you are already
+            // looking at that app.
+            if (w.Key != null) Upsert(w.Key, label, chat.Length > 0 ? chat : null, "done", "", app, InFront(proc));
         }
+    }
+
+    static string ChatName(string page)
+    {
+        foreach (string tail in new[] { " - Claude Code", " - Claude", " - ChatGPT", " | ChatGPT" })
+            if (page.EndsWith(tail)) { page = page.Substring(0, page.Length - tail.Length); break; }
+        page = page.Trim();
+        return page == "Claude" || page == "ChatGPT" || page == "New chat" || page == "Claude Code" ? "" : Short(page, 70);
+    }
+
+    static bool InFront(string proc)
+    {
+        try
+        {
+            uint pid;
+            GetWindowThreadProcessId(GetForegroundWindow(), out pid);
+            return string.Equals(Process.GetProcessById((int)pid).ProcessName, proc, StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
+    }
+
+    /* -------------------------------------------------------------- *
+     * Codex and Work in the ChatGPT app, and the Codex CLI. Each run is
+     * written to ~/.codex/sessions as it happens: a task_started line when
+     * it begins and task_complete when it ends. The files keep growing
+     * while the app's window is minimized, when its screen does not.
+     * -------------------------------------------------------------- */
+
+    class Follow { public long Offset; public string Id = "", Label = "Codex", Key; public bool Running; public DateTime StartedAt = DateTime.MinValue; }
+    readonly Dictionary<string, Follow> follows = new Dictionary<string, Follow>(StringComparer.OrdinalIgnoreCase);
+    bool codexPrimed;
+    static readonly Regex EventType = new Regex("\"type\":\"event_msg\",\"payload\":\\{\"type\":\"([a-z_]+)\"");
+
+    void ScanCodex()
+    {
+        string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex");
+        string sessions = Path.Combine(root, "sessions");
+        if (!Directory.Exists(sessions)) return;
+
+        // The app keeps a lock file for each thread it writes. A thread
+        // resumed from days ago is followed through its lock, because
+        // Windows can be slow to move a file's write time on.
+        HashSet<string> locked = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        string locks = Path.Combine(root, "thread-writer-locks");
+        if (Directory.Exists(locks))
+            foreach (string l in Directory.GetFiles(locks, "*.lock")) locked.Add(Path.GetFileNameWithoutExtension(l));
+
+        DateTime since = DateTime.Now.AddDays(-2);
+        foreach (string f in Directory.GetFiles(sessions, "rollout-*.jsonl", SearchOption.AllDirectories))
+        {
+            Follow fo;
+            if (!follows.TryGetValue(f, out fo))
+            {
+                string name = Path.GetFileNameWithoutExtension(f);
+                string id = name.Length > 36 ? name.Substring(name.Length - 36) : "";
+                if (File.GetLastWriteTime(f) < since && !locked.Contains(id)) continue;
+                fo = new Follow();
+                follows[f] = fo;
+            }
+            ReadNew(root, f, fo);
+        }
+
+        if (!codexPrimed)
+        {
+            // First pass after a start: runs that ended before now are not
+            // news, but one still going is.
+            codexPrimed = true;
+            foreach (Follow fo in follows.Values)
+                if (fo.Running && fo.Key != null && (DateTime.Now - fo.StartedAt).TotalHours < 3)
+                    Upsert(fo.Key, fo.Label, CodexTitle(root, fo), "working", "", "chatgpt", true);
+        }
+    }
+
+    void ReadNew(string root, string f, Follow fo)
+    {
+        using (FileStream s = new FileStream(f, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+        {
+            long len = s.Length;
+            if (len <= fo.Offset) return;
+            s.Seek(fo.Offset, SeekOrigin.Begin);
+            byte[] buf = new byte[len - fo.Offset];
+            int got = 0;
+            while (got < buf.Length)
+            {
+                int n = s.Read(buf, got, buf.Length - got);
+                if (n <= 0) break;
+                got += n;
+            }
+            if (got == 0) return;
+            // Only whole lines; a half-written one waits for the next pass.
+            int end = Array.LastIndexOf(buf, (byte)'\n', got - 1);
+            if (end < 0) return;
+            fo.Offset += end + 1;
+            foreach (string line in Encoding.UTF8.GetString(buf, 0, end + 1).Split('\n'))
+                HandleCodexLine(root, fo, line);
+        }
+    }
+
+    void HandleCodexLine(string root, Follow fo, string line)
+    {
+        if (line.Length == 0) return;
+        if (fo.Id.Length == 0 && line.Contains("\"type\":\"session_meta\""))
+        {
+            fo.Id = JsonField(line, "id");
+            string origin = JsonField(line, "originator");
+            fo.Label = origin == "codex_work_desktop" ? "ChatGPT Work" : origin == "Codex Desktop" ? "Codex" : "Codex CLI";
+            return;
+        }
+        Match m = EventType.Match(line);
+        if (!m.Success) return;
+        string type = m.Groups[1].Value;
+        DateTime at;
+        if (!DateTime.TryParse(JsonField(line, "timestamp"), System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out at))
+            at = DateTime.UtcNow;
+        at = DateTime.SpecifyKind(at, DateTimeKind.Utc).ToLocalTime();
+
+        if (type == "task_started")
+        {
+            fo.Running = true;
+            fo.StartedAt = at;
+            fo.Key = "cx:" + fo.Id + ":" + at.Ticks;
+            if (!codexPrimed) return;
+            AdoptChatGptRun();
+            Upsert(fo.Key, fo.Label, CodexTitle(root, fo), "working", "", "chatgpt", false);
+        }
+        else if (type == "task_complete" || type == "turn_aborted")
+        {
+            fo.Running = false;
+            // A run you stopped yourself is not news.
+            if (codexPrimed && fo.Key != null)
+                Upsert(fo.Key, fo.Label, CodexTitle(root, fo), "done", "", "chatgpt", type == "turn_aborted" || InFront("ChatGPT"));
+        }
+        else if (type.Contains("approval_request") || type.StartsWith("request_user_input") || type.Contains("elicitation"))
+        {
+            if (codexPrimed && fo.Key != null)
+                Upsert(fo.Key, fo.Label, CodexTitle(root, fo), "needs", "", "chatgpt", InFront("ChatGPT"));
+        }
+    }
+
+    bool CodexBusy()
+    {
+        foreach (Follow fo in follows.Values)
+            if (fo.Running || (DateTime.Now - fo.StartedAt).TotalSeconds < 15) return true;
+        return false;
+    }
+
+    // The app's screen saw a Stop button before the session file said a
+    // Work run had begun: the file's entry, with its real title, replaces it.
+    void AdoptChatGptRun()
+    {
+        AppWatch w;
+        if (!watches.TryGetValue("ChatGPT", out w) || !w.Running || w.Key == null) return;
+        if ((DateTime.Now - w.Since).TotalSeconds > 20) return;
+        lock (gate) items.Remove(w.Key);
+        w.Key = null;
+        Save();
+        Refresh();
+    }
+
+    // The thread's name from session_index.jsonl, which the app writes a
+    // few seconds into a new thread; until then, when it started.
+    string CodexTitle(string root, Follow fo)
+    {
+        try
+        {
+            string index = Path.Combine(root, "session_index.jsonl");
+            string marker = "\"id\":\"" + fo.Id + "\"";
+            string found = null;
+            using (FileStream s = new FileStream(index, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            using (StreamReader r = new StreamReader(s, Encoding.UTF8))
+            {
+                string line;
+                while ((line = r.ReadLine()) != null) if (line.Contains(marker)) found = line;
+            }
+            if (found != null)
+            {
+                Dictionary<string, object> d = json.Deserialize<Dictionary<string, object>>(found);
+                string name = Str(d, "thread_name");
+                if (name.Length > 0) return Short(name, 70);
+            }
+        }
+        catch { }
+        return fo.Label + " · started " + fo.StartedAt.ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    // What you typed, without what the Claude desktop app wraps around it:
+    // <system-reminder> context, pasted blocks, and slash-command tags, of
+    // which only the command itself is kept.
+    static readonly Regex Wrapped = new Regex(
+        @"<(?<t>system-reminder|pasted_content|local-command-[a-z-]+|command-message|command-args)\b[^>]*>[\s\S]*?(</\k<t>>|$)",
+        RegexOptions.IgnoreCase);
+
+    static string CleanPrompt(string p)
+    {
+        p = p ?? "";
+        Match cmd = Regex.Match(p, @"<command-name>\s*([^<]+?)\s*</command-name>");
+        p = Wrapped.Replace(p, " ");
+        p = Regex.Replace(p, @"</?[a-zA-Z][\w-]*(\s[^>]*)?>", " ");
+        p = Regex.Replace(p, @"\s+", " ").Trim();
+        if (p.Length == 0 && cmd.Success) p = cmd.Groups[1].Value;
+        return p;
+    }
+
+    // The first "name":"value" in a JSON line, without parsing the rest,
+    // which in a session's first line runs to tens of kilobytes.
+    static string JsonField(string line, string name)
+    {
+        Match m = Regex.Match(line, "\"" + Regex.Escape(name) + "\":\"((?:[^\"\\\\]|\\\\.)*)\"");
+        return m.Success ? Regex.Unescape(m.Groups[1].Value) : "";
     }
 
     // %TEMP%\PromptAdvisor-board.log, kept under 200 KB.
@@ -617,7 +879,7 @@ public class BoardForm : Form
         string[][] groups =
         {
             new[] { "Needs you", "needs" },
-            new[] { "Working", "working" },
+            new[] { "Working", "working", "hidden" },
             new[] { "Earlier", "done", "lost" }
         };
         foreach (string[] grp in groups)
@@ -750,6 +1012,17 @@ public class BoardForm : Form
             }
             return;
         }
+        if (state == "hidden")
+        {
+            // Still running, as far as anyone knows, but out of sight: a
+            // broken ring, standing still.
+            using (Pen ring = new Pen(Faint, 2f))
+            {
+                ring.DashPattern = new float[] { 2f, 1.6f };
+                g.DrawEllipse(ring, cx - 8, cy - 8, 16, 16);
+            }
+            return;
+        }
         Color c = state == "done" ? Green : state == "needs" ? Orange : Faint;
         using (SolidBrush b = new SolidBrush(Color.FromArgb(state == "lost" ? 0 : 46, c))) g.FillEllipse(b, disc);
         using (Pen p = new Pen(c, 1.8f))
@@ -787,7 +1060,7 @@ public class BoardForm : Form
     {
         float y = Ht - Foot;
         using (Pen p = new Pen(Line, 1f)) g.DrawLine(p, 0, y + 0.5f, Wd, y + 0.5f);
-        bool any = items.Exists(delegate (TaskItem it) { return it.State != "working" && it.State != "needs"; });
+        bool any = items.Exists(delegate (TaskItem it) { return it.State != "working" && it.State != "needs" && it.State != "hidden"; });
         RectangleF c = ClearRect();
         if (any && overClear)
             using (SolidBrush b = new SolidBrush(Hover))
@@ -809,6 +1082,7 @@ public class BoardForm : Form
             int m = (int)(DateTime.Now - it.Started).TotalMinutes;
             return m < 1 ? "Started just now" : "Running " + m + " min";
         }
+        if (it.State == "hidden") return "Minimized, open to check";
         TimeSpan ago = DateTime.Now - it.Updated;
         if (ago.TotalMinutes < 1) return "Just now";
         if (ago.TotalMinutes < 60) return (int)ago.TotalMinutes + " min ago";
