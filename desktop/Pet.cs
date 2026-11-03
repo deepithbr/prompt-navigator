@@ -401,7 +401,7 @@ public class PetForm : Form
                     g.DrawLine(rim, 9.5f, -39, 9.5f, -27);
                 }
 
-            // War marks: two strokes down each cheek and one on the brow.
+            // War marks: two strokes across each cheekbone and one on the brow.
             // Dark red at rest, lit in the aura's colour once his power is up.
             Color markColour = aura == Color.Empty ? Mark : Blend(aura, Color.White, blazing ? 0.45f : 0.15f);
             if (aura != Color.Empty)
@@ -487,10 +487,12 @@ public class PetForm : Form
 
     static void Marks(Graphics g, Pen p)
     {
-        g.DrawLine(p, -12, -54, -14, -47);
-        g.DrawLine(p, -8.5f, -54, -10.5f, -47);
-        g.DrawLine(p, 12, -54, 14, -47);
-        g.DrawLine(p, 8.5f, -54, 10.5f, -47);
+        // Slashed back along the cheekbones toward the ears. Drawn straight
+        // down from the eyes they read as tears.
+        g.DrawLine(p, -11, -53, -19, -56);
+        g.DrawLine(p, -11, -49, -18, -51.5f);
+        g.DrawLine(p, 11, -53, 19, -56);
+        g.DrawLine(p, 11, -49, 18, -51.5f);
         g.DrawLine(p, 0, -80, 0, -75);
     }
 
