@@ -275,9 +275,20 @@ class AdvisorContext : ApplicationContext
         menu.MenuItems.Add(about);
         menu.MenuItems.Add("-");
         menu.MenuItems.Add("Tasks", delegate { if (board != null) board.Show(); });
+        // The pet: shown only while a task runs or waits on you, always, or never.
         MenuItem petItem = new MenuItem("Pet");
-        petItem.Click += delegate { if (pet != null) pet.SetWanted(!pet.Wanted); };
-        menu.Popup += delegate { petItem.Checked = pet != null && pet.Wanted; };
+        MenuItem petAuto = new MenuItem("Show while a task runs");
+        MenuItem petAlways = new MenuItem("Always show");
+        MenuItem petOff = new MenuItem("Never show");
+        petAuto.Click += delegate { if (pet != null) pet.SetMode("auto"); };
+        petAlways.Click += delegate { if (pet != null) pet.SetMode("always"); };
+        petOff.Click += delegate { if (pet != null) pet.SetMode("off"); };
+        foreach (MenuItem m in new[] { petAuto, petAlways, petOff }) { m.RadioCheck = true; petItem.MenuItems.Add(m); }
+        petItem.Popup += delegate
+        {
+            string mode = pet != null ? pet.Mode : "auto";
+            petAuto.Checked = mode == "auto"; petAlways.Checked = mode == "always"; petOff.Checked = mode == "off";
+        };
         menu.MenuItems.Add(petItem);
         MenuItem pause = new MenuItem("Pause");
         pause.Click += delegate { paused = !paused; pause.Text = paused ? "Resume" : "Pause"; if (paused) HideHint(); };
@@ -295,7 +306,7 @@ class AdvisorContext : ApplicationContext
 
         // The desk pet in the corner of the screen, fed by the board.
         pet = new PetForm(board);
-        if (pet.Wanted) pet.Show();
+        pet.Start();
 
         worker = new Thread(Loop);
         worker.IsBackground = true;

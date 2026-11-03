@@ -8,6 +8,11 @@
 // forward. A tray balloon was the only signal before, and Windows hides those
 // under Do not disturb and drops them after a few seconds.
 //
+// By default it only appears when there is something to show: it fades in
+// when a task starts or finishes, and fades out once nothing has run and
+// nothing has waited on you for two minutes. "Always" keeps it on screen and
+// "Never" keeps it away; the tray menu's Pet item picks between the three.
+//
 // The window is a layered window drawn with per-pixel alpha, so only the core
 // and its bubble catch the mouse and everything around them clicks through.
 
@@ -55,7 +60,14 @@ public class PetForm : Form
     bool pressed, dragging;
     Point downAt, startAt;
 
-    public bool Wanted = true;
+    // "auto" shows it only while something is running or waiting on you,
+    // "always" keeps it on screen, "off" never shows it.
+    public string Mode = "auto";
+    const double IdleHide = 120;
+    double lastBusy = -1000;
+    float fade = 1f;
+    bool leaving, snoozed;
+    int lastWorking;
 
     public PetForm(TaskBoard board)
     {
@@ -76,7 +88,8 @@ public class PetForm : Form
         MenuItem chime = new MenuItem("Sound");
         chime.Click += delegate { sound = !sound; Save(); };
         menu.MenuItems.Add(chime);
-        menu.MenuItems.Add("Hide pet", delegate { SetWanted(false); });
+        // Away until the next task starts or finishes, whatever the mode.
+        menu.MenuItems.Add("Hide until the next task", delegate { alerts.Clear(); flash = null; snoozed = true; Hide(); });
         menu.Popup += delegate { chime.Checked = sound; };
         ContextMenu = menu;
 
@@ -105,8 +118,16 @@ public class PetForm : Form
         board.Alerted += delegate (TaskItem it) { if (IsHandleCreated) BeginInvoke((Action)delegate { Alert(it); }); };
 
         tick.Interval = 50;
-        tick.Tick += delegate { Render(); };
+        tick.Tick += delegate { Fade(); if (Visible) Render(); };
         Load_();
+    }
+
+    // Called once at start-up: the window exists from then on, hidden or
+    // not, so the board's events always reach it.
+    public void Start()
+    {
+        IntPtr unused = Handle;
+        if (Mode == "always") Present();
     }
 
     protected override CreateParams CreateParams
@@ -141,11 +162,39 @@ public class PetForm : Form
         tick.Enabled = Visible;
     }
 
-    public void SetWanted(bool on)
+    public void SetMode(string mode)
     {
-        Wanted = on;
-        if (on) { Show(); Render(); } else Hide();
+        Mode = mode;
         Save();
+        if (mode == "off") Hide();
+        else if (mode == "always" || Busy()) Present();
+        else if (Visible) leaving = true;
+    }
+
+    bool Busy() { return working > 0 || alerts.Count > 0 || flash != null; }
+
+    // Fade in, from wherever it was.
+    void Present()
+    {
+        if (Mode == "off") return;
+        leaving = false;
+        if (!Visible) { fade = 0; Show(); }
+        Render();
+    }
+
+    // Each tick: in "auto", start leaving once idle for two minutes; then
+    // move the fade a step toward where it is heading.
+    void Fade()
+    {
+        double now = clock.Elapsed.TotalSeconds;
+        if (Busy()) { lastBusy = now; leaving = false; }
+        else if (Mode == "auto" && now - lastBusy > IdleHide) leaving = true;
+        if (leaving)
+        {
+            fade -= 0.06f;
+            if (fade <= 0) { fade = 0; leaving = false; Hide(); }
+        }
+        else if (fade < 1) fade = Math.Min(1f, fade + 0.12f);
     }
 
     /* -------------------------------------------------------------- *
@@ -170,6 +219,11 @@ public class PetForm : Form
             TaskItem now;
             return !byKey.TryGetValue(a.Key, out now) || now.State == "working";
         });
+        // Hidden by hand, it stays away until a task starts that was not
+        // already running then.
+        if (working > lastWorking) snoozed = false;
+        lastWorking = working;
+        if (Busy() && !snoozed) { lastBusy = clock.Elapsed.TotalSeconds; Present(); }
     }
 
     void Alert(TaskItem it)
@@ -181,11 +235,16 @@ public class PetForm : Form
         {
             flash = it;
             flashUntil = now + 4;
+            lastBusy = now;
+            Present();
             return;
         }
         alerts.RemoveAll(delegate (TaskItem a) { return a.Key == it.Key; });
         alerts.Add(it);
-        if (sound)
+        lastBusy = now;
+        snoozed = false;
+        Present();
+        if (sound && Mode != "off")
         {
             if (it.State == "needs") SystemSounds.Exclamation.Play();
             else SystemSounds.Asterisk.Play();
@@ -237,7 +296,7 @@ public class PetForm : Form
                     g.ScaleTransform(scale, scale);
                     Draw(g, clock.Elapsed.TotalSeconds);
                 }
-                Layered.Push(this, bmp);
+                Layered.Push(this, bmp, (byte)(255 * fade));
             }
         }
         catch (Exception e)
@@ -420,7 +479,9 @@ public class PetForm : Form
                         if (s.WorkingArea.Contains(x + 200, y + 120)) { Location = new Point(x, y); placed = true; break; }
                 }
                 if (kv.ContainsKey("sound")) sound = kv["sound"] != "0";
-                if (kv.ContainsKey("shown")) Wanted = kv["shown"] != "0";
+                if (kv.ContainsKey("mode")) Mode = kv["mode"] == "always" || kv["mode"] == "off" ? kv["mode"] : "auto";
+                // Before the modes, the pet was simply shown or hidden.
+                else if (kv.ContainsKey("shown") && kv["shown"] == "0") Mode = "off";
             }
         }
         catch { }
@@ -430,7 +491,7 @@ public class PetForm : Form
     {
         try
         {
-            File.WriteAllText(settings, "x=" + Left + "\r\ny=" + Top + "\r\nsound=" + (sound ? 1 : 0) + "\r\nshown=" + (Wanted ? 1 : 0) + "\r\n");
+            File.WriteAllText(settings, "x=" + Left + "\r\ny=" + Top + "\r\nsound=" + (sound ? 1 : 0) + "\r\nmode=" + Mode + "\r\n");
         }
         catch { }
     }
@@ -449,7 +510,7 @@ public class PetForm : Form
         [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
         [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr obj);
 
-        public static void Push(Form f, Bitmap bmp)
+        public static void Push(Form f, Bitmap bmp, byte alpha)
         {
             IntPtr screen = GetDC(IntPtr.Zero), mem = CreateCompatibleDC(screen);
             IntPtr hbmp = bmp.GetHbitmap(Color.FromArgb(0)), old = SelectObject(mem, hbmp);
@@ -457,7 +518,7 @@ public class PetForm : Form
             {
                 SIZE size = new SIZE(); size.cx = bmp.Width; size.cy = bmp.Height;
                 POINT from = new POINT(), at = new POINT(); at.x = f.Left; at.y = f.Top;
-                BLEND blend = new BLEND(); blend.Alpha = 255; blend.Format = 1; // AC_SRC_ALPHA
+                BLEND blend = new BLEND(); blend.Alpha = alpha; blend.Format = 1; // AC_SRC_ALPHA
                 UpdateLayeredWindow(f.Handle, screen, ref at, ref size, mem, ref from, 0, ref blend, 2); // ULW_ALPHA
             }
             finally
