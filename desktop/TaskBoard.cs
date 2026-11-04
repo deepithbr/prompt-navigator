@@ -1124,7 +1124,7 @@ public class TaskBoard
     // Whether you can see a Claude chat right now: the Claude app in front
     // and showing a chat, not its Code tab. A finish there needs no alert.
     volatile bool claudeChatShown;
-    bool ChatInView() { return claudeChatShown && InFront("claude"); }
+    public bool ChatInView() { return claudeChatShown && InFront("claude"); }
 
     void AccountEvent(Dictionary<string, object> d)
     {
