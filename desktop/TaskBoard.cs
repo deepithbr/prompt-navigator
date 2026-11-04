@@ -537,8 +537,8 @@ public class TaskBoard
             if (what == "needs" && Str(d, "message").Length > 0) title = title + " \u00B7 " + Short(Str(d, "message"), 50);
             Upsert("cc:" + sid, source, title, state, "", "claude", false);
             if (what != "start") claudeCodeSaidAt = DateTime.Now;
-            string transcript = Str(d, "transcript_path");
-            if (transcript.Length > 0) lock (gate) transcripts["cc:" + sid] = new Transcript(transcript);
+            string transcript = TranscriptPath(Str(d, "transcript_path"));
+            if (transcript != null) lock (gate) transcripts["cc:" + sid] = new Transcript(transcript);
             return;
         }
 
@@ -606,6 +606,32 @@ public class TaskBoard
     }
 
     readonly Dictionary<string, Transcript> transcripts = new Dictionary<string, Transcript>();
+
+    // The path arrives in a request, so it is only ever opened when it is a
+    // .jsonl file on a local drive inside a folder Claude Code writes its
+    // transcripts to. A network path such as \\server\share would make
+    // Windows offer your sign-in to that server just by opening it.
+    static string TranscriptPath(string raw)
+    {
+        if (string.IsNullOrEmpty(raw) || raw.StartsWith(@"\\") || raw.StartsWith("//")) return null;
+        string full;
+        try
+        {
+            if (!Path.IsPathRooted(raw) || raw.IndexOf(':') != 1) return null;
+            full = Path.GetFullPath(raw);
+        }
+        catch { return null; }
+        if (full.StartsWith(@"\\") || !full.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase)) return null;
+        string[] roots =
+        {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude") + @"\",
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Claude-Data") + @"\",
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Claude") + @"\"
+        };
+        foreach (string root in roots)
+            if (full.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return full;
+        return null;
+    }
     DateTime transcriptsCheckedAt = DateTime.MinValue;
 
     void CheckTranscripts()
