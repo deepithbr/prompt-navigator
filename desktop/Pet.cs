@@ -205,6 +205,8 @@ public class PetForm : Form
             if (canvas != null) canvas.Dispose();
             foreach (Bitmap b in glows.Values) b.Dispose();
             glows.Clear();
+            foreach (Bitmap[] h in hazes.Values) { h[0].Dispose(); h[1].Dispose(); }
+            hazes.Clear();
         }
         base.Dispose(disposing);
     }
@@ -549,7 +551,7 @@ public class PetForm : Form
         float cx = W - 8 - Span / 2f, cy = H - 8 - Span / 2f;
         GraphicsState saved = g.Save();
         g.TranslateTransform(cx, cy);
-        DrawVoidling(g, t, mood, t - alertAt);
+        DrawHole(g, t, mood, t - alertAt);
         g.Restore(saved);
 
         float top = cy - 34;
@@ -701,6 +703,290 @@ public class PetForm : Form
         }
 
         if (burst) DrawStarlight(g, t, since, core);
+    }
+
+    // Voidling as a lensed black hole, centred on the origin, drawn from how
+    // one looks rather than from any picture of one:
+    //
+    //   - a flat, streaky disk of hot gas seen nearly edge-on, its far half
+    //     behind the void and its near half crossing in front of it;
+    //   - the far half's light bent up and over the top of the void, and a
+    //     thinner image of it bent under the bottom;
+    //   - a thin, very bright photon ring hugging the void;
+    //   - the side of the disk spinning toward you brighter than the other.
+    //
+    // Mood is in brightness, colour and how fast the gas flows, never in a
+    // face: dim amber at rest, white-gold while working, a blue-white flare
+    // on a finish, a slow crimson pulse when something needs you.
+    static readonly Color HotWhite = Color.FromArgb(255, 247, 234);
+    static readonly Color Gold2 = Color.FromArgb(255, 192, 112);
+    static readonly Color Amber = Color.FromArgb(214, 118, 58);
+    static readonly Color BlueWhite = Color.FromArgb(206, 228, 255);
+    static readonly Color Crimson = Color.FromArgb(226, 46, 52);
+
+    void DrawHole(Graphics g, double t, Mood mood, double since)
+    {
+        bool burst = mood == Mood.Done && since < 3;
+        bool deep = mood == Mood.Resting && t - lastBusy > 25 && !noticed;
+        float core = 14.5f, bright, flow, lift = 0;
+        Color hot, mid, outer;
+        switch (mood)
+        {
+            case Mood.Hidden:
+                bright = 0.32f; flow = 0.15f; hot = Gold2; mid = Amber; outer = Blend(Amber, Void, 0.4f); break;
+            case Mood.Thinking:
+                bright = 0.85f; flow = 1.6f; core = 13.5f; hot = HotWhite; mid = Gold2; outer = Amber; break;
+            case Mood.Working:
+                bright = 0.95f + 0.05f * (float)Math.Sin(t * 2); flow = 1f; hot = HotWhite; mid = Gold2; outer = Amber; break;
+            case Mood.Done:
+                if (burst)
+                {
+                    // The flare: blue-white light rushing out, easing back to gold.
+                    float k = (float)Math.Min(1, since / 3);
+                    hot = Blend(BlueWhite, HotWhite, k); mid = Blend(BlueWhite, Gold2, k); outer = Blend(Color.FromArgb(120, 160, 230), Amber, k);
+                    bright = 1.1f - 0.2f * k; flow = 1.4f - 0.6f * k;
+                    if (since < 1.4) lift = 5 * (float)Math.Sin(since / 1.4 * Math.PI);
+                }
+                else { hot = HotWhite; mid = Gold2; outer = Amber; bright = 0.8f; flow = 0.6f; }
+                break;
+            case Mood.Needs:
+                // The gas cools to crimson and its light breathes slowly.
+                bright = 0.6f + 0.35f * (float)(0.5 + 0.5 * Math.Sin(t * 2.6));
+                flow = 0.7f; hot = Color.FromArgb(255, 196, 186); mid = Crimson; outer = Color.FromArgb(130, 20, 34); break;
+            default:
+                bright = deep ? 0.42f : 0.55f; flow = deep ? 0.22f : 0.35f; hot = Gold2; mid = Amber; outer = Color.FromArgb(150, 70, 36); break;
+        }
+        if (still) flow *= 0.4f;
+        bright += 0.12f * attend;
+
+        float bob = (float)Math.Sin(t * 1.05) * (still ? 0.6f : 1.6f);
+        float breath = (float)Math.Sin(t * 1.2) * 0.02f;
+        g.TranslateTransform(0, bob - lift);
+
+        // A wide, faint glow of scattered light.
+        Blit(g, Glow(mid, 0.42f * bright), -GlowR, -GlowR, 2 * GlowR, 2 * GlowR);
+
+        double phase = t * flow;          // how far the gas has turned
+        float rx = 42, ry = 6.5f;         // the disk, nearly edge-on
+        float tilt = -9 + attendX * 6;    // turned a little toward you when noticed
+        float c = core * (1 + breath);
+
+        GraphicsState level = g.Save();
+        g.RotateTransform(tilt);
+
+        // The soft glow of the disk and arches, which does not move, comes
+        // from a cache; only the streaks of gas are drawn each frame.
+        Bitmap[] haze = Haze(mid, bright, rx, ry, core);
+        GraphicsState flat = g.Save();
+        g.RotateTransform(-tilt);
+        Blit(g, haze[0], -HazeW / 2, -HazeTop, HazeW, HazeH);
+        g.Restore(flat);
+
+        // 1. The far half of the disk, behind everything.
+        DiskBand(g, phase, rx, ry, hot, mid, outer, bright * 0.8f, true, false);
+
+        // 2. Its light bent over the top of the void: the arch.
+        DiskArch(g, phase, c, hot, mid, outer, bright, true, false);
+        // 3. And a thinner image bent under the bottom.
+        DiskArch(g, phase, c, hot, mid, outer, bright * 0.55f, false, false);
+
+        // 4. The void, and the photon ring right at its edge.
+        using (SolidBrush b = new SolidBrush(Void)) g.FillEllipse(b, -c, -c, 2 * c, 2 * c);
+        using (Pen ring = new Pen(Color.FromArgb(Clamp(255 * Math.Min(1, bright + 0.15)), hot), 1.5f))
+            g.DrawEllipse(ring, -c - 0.4f, -c - 0.4f, 2 * c + 0.8f, 2 * c + 0.8f);
+        using (Pen soft = new Pen(Color.FromArgb(Clamp(90 * bright), mid), 3.2f))
+            g.DrawEllipse(soft, -c - 1.8f, -c - 1.8f, 2 * c + 3.6f, 2 * c + 3.6f);
+
+        // 5. The near half of the disk, crossing in front of the void.
+        flat = g.Save();
+        g.RotateTransform(-tilt);
+        Blit(g, haze[1], -HazeW / 2, -HazeTop, HazeW, HazeH);
+        g.Restore(flat);
+        DiskBand(g, phase, rx, ry, hot, mid, outer, bright, false, false);
+        g.Restore(level);
+
+        // A finish: one ripple of light rolling out.
+        if (burst)
+        {
+            double ph = Math.Min(1, since / 1.6);
+            float r = c + 6 + (float)ph * 30;
+            using (Pen p = new Pen(Color.FromArgb(Clamp(150 * (1 - ph) * (1 - ph)), BlueWhite), 1.3f))
+                g.DrawEllipse(p, -r, -r * 0.8f, 2 * r, 1.6f * r);
+        }
+
+        // A snack: now and then a mote of gas falls in along the disk.
+        double snack = mood == Mood.Resting || mood == Mood.Working ? (t % 13) / 13 : 0;
+        if (snack > 0.84 && snack < 0.965)
+        {
+            float k = (float)((snack - 0.84) / 0.125);
+            double a = Math.PI * (1.1 + 2.6 * k);
+            float r = rx * (1 - k) + c * k;
+            g.RotateTransform(tilt);
+            using (SolidBrush b = new SolidBrush(Color.FromArgb(Clamp(230 * (1 - 0.7 * k)), HotWhite)))
+                g.FillEllipse(b, (float)Math.Cos(a) * r - 1.4f, (float)Math.Sin(a) * r * (ry / rx) * 3 - 1.4f, 2.8f, 2.8f);
+        }
+    }
+
+    static int Clamp(double v) { return v < 0 ? 0 : v > 255 ? 255 : (int)v; }
+
+    // A cached image drawn at its own pixel size: no smoothing pass needed.
+    static void Blit(Graphics g, Bitmap b, float x, float y, float w, float h)
+    {
+        InterpolationMode im = g.InterpolationMode;
+        PixelOffsetMode pm = g.PixelOffsetMode;
+        g.InterpolationMode = InterpolationMode.NearestNeighbor;
+        g.PixelOffsetMode = PixelOffsetMode.Half;
+        g.DrawImage(b, x, y, w, h);
+        g.InterpolationMode = im;
+        g.PixelOffsetMode = pm;
+    }
+
+    // The cached soft layers: [0] behind the void (far half of the disk,
+    // both arches), [1] in front of it (near half). One pair per colour,
+    // core size and one of 40 brightnesses, at this screen's scale.
+    const float HazeW = 100, HazeH = 58, HazeTop = 36;
+    readonly Dictionary<long, Bitmap[]> hazes = new Dictionary<long, Bitmap[]>();
+
+    Bitmap[] Haze(Color mid, float bright, float rx, float ry, float core)
+    {
+        int level = Math.Max(0, Math.Min(48, (int)Math.Round(bright * 40)));
+        long key = ((long)(mid.ToArgb() & 0xFFFFFF) * 64 + level) * 64 + (int)(core * 2);
+        Bitmap[] pair;
+        if (hazes.TryGetValue(key, out pair)) return pair;
+        if (hazes.Count > 160) { foreach (Bitmap[] old in hazes.Values) { old[0].Dispose(); old[1].Dispose(); } hazes.Clear(); }
+        float b = level / 40f;
+        pair = new Bitmap[2];
+        for (int k = 0; k < 2; k++)
+        {
+            int w = (int)Math.Ceiling(HazeW * scale), h = (int)Math.Ceiling(HazeH * scale);
+            Bitmap bmp = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
+            bmp.SetResolution(96, 96);
+            using (Graphics g = Graphics.FromImage(bmp))
+            {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.ScaleTransform(w / HazeW, h / HazeH);
+                g.TranslateTransform(HazeW / 2, HazeTop);
+                g.RotateTransform(-9);
+                if (k == 0)
+                {
+                    DiskBand(g, 0, rx, ry, mid, mid, mid, b * 0.8f, true, true);
+                    DiskArch(g, 0, core, mid, mid, mid, b, true, true);
+                    DiskArch(g, 0, core, mid, mid, mid, b * 0.55f, false, true);
+                }
+                else DiskBand(g, 0, rx, ry, mid, mid, mid, b, false, true);
+            }
+            pair[k] = bmp;
+        }
+        hazes[key] = pair;
+        return pair;
+    }
+
+    // Brighter on the side spinning toward you (the left), dimmer on the
+    // other: what makes a real disk look lopsided.
+    static double Beaming(double a) { return 0.45 + 0.55 * (0.5 - 0.5 * Math.Cos(a)); }
+
+    // Streaks in the gas that drift round with it, so the disk visibly flows.
+    static double Streak(double a, double phase, int lane)
+    {
+        double s = Math.Sin(a * 5 + phase * 2.2 + lane * 1.7) * 0.5 + Math.Sin(a * 11 - phase * 3.1 + lane * 0.9) * 0.3;
+        return 0.62 + 0.38 * s;
+    }
+
+    // The flat disk as a few thin lanes of gas, from hot near the void to
+    // cool at the rim. back: the far half, which the void then covers.
+    static void DiskBand(Graphics g, double phase, float rx, float ry, Color hot, Color mid, Color outer, float bright, bool back, bool soft)
+    {
+        const int n = 40;
+        // The sheet: a broad soft stroke the lanes sit on, so they merge.
+        if (soft) using (Pen sheet = new Pen(mid, ry * 1.3f))
+        {
+            sheet.StartCap = sheet.EndCap = LineCap.Round;
+            for (int i = 0; i < n; i += 2)
+            {
+                double a = 2 * Math.PI * i / n, b = 2 * Math.PI * (i + 2) / n;
+                if ((Math.Sin(a) < 0) != back) continue;
+                sheet.Color = Color.FromArgb(Clamp(70 * bright * Beaming(a)), mid);
+                g.DrawLine(sheet, (float)(Math.Cos(a) * rx * 0.7f), (float)(Math.Sin(a) * ry * 0.75f), (float)(Math.Cos(b) * rx * 0.7f), (float)(Math.Sin(b) * ry * 0.75f));
+            }
+        }
+        if (soft) return;
+        float[] lanes = { 0.38f, 0.52f, 0.7f, 0.92f };
+        for (int l = 0; l < lanes.Length; l++)
+        {
+            float k = lanes[l], lrx = rx * k, lry = ry * (0.55f + 0.45f * k);
+            float heat = 1 - (float)l / (lanes.Length - 1);
+            Color col = heat > 0.5f ? Blend(mid, hot, (heat - 0.5f) * 2) : Blend(outer, mid, heat * 2);
+            float v = bright * (0.45f + 0.55f * heat);
+            DrawLane(g, phase, l, -lrx, -lry, 2 * lrx, 2 * lry, back ? 180 : 0, 180, col, v, 1.4f + heat * 0.8f, false);
+        }
+    }
+
+    // One lane of gas as a single arc: a gradient across it, brighter on
+    // the side turning toward you, and dashes that slide along it as the gas
+    // flows. One call per lane, where drawing it in pieces took dozens.
+    static void DrawLane(Graphics g, double phase, int lane, float x, float y, float w, float h, float start, float sweep,
+        Color col, float v, float width, bool fadeEnds)
+    {
+        if (w < 1 || h < 0.5f) return;
+        RectangleF box = new RectangleF(x - 1, y - 1, w + 2, h + 2);
+        using (LinearGradientBrush brush = new LinearGradientBrush(box, col, col, LinearGradientMode.Horizontal))
+        {
+            ColorBlend blend = new ColorBlend(3);
+            if (fadeEnds)
+            {
+                blend.Positions = new[] { 0f, 0.2f, 0.45f, 0.75f, 1f };
+                blend.Colors = new[] { Color.FromArgb(0, col), Color.FromArgb(Clamp(235 * v), col), Color.FromArgb(Clamp(255 * v), col),
+                    Color.FromArgb(Clamp(170 * v), col), Color.FromArgb(0, col) };
+            }
+            else
+            {
+                // Left, turning toward you, brightest; right, turning away, dimmest.
+                blend.Positions = new[] { 0f, 0.35f, 1f };
+                blend.Colors = new[] { Color.FromArgb(Clamp(255 * v), col), Color.FromArgb(Clamp(190 * v), col), Color.FromArgb(Clamp(80 * v), col) };
+            }
+            brush.InterpolationColors = blend;
+            using (Pen p = new Pen(brush, width))
+            {
+                // Streaks: uneven dashes, each lane its own rhythm, drifting along.
+                p.DashPattern = lane % 2 == 0 ? new[] { 9f, 0.55f, 4.5f, 0.45f } : new[] { 6.5f, 0.5f, 11f, 0.6f };
+                p.DashOffset = (float)(phase * (2.4 + 0.5 * lane) % 100);
+                p.DashCap = DashCap.Flat;
+                g.DrawArc(p, x, y, w, h, start, sweep);
+            }
+        }
+    }
+
+    // The disk's light bent round the void: an arch over the top, or a thin
+    // band under the bottom. Brightest straight above or below the void.
+    static void DiskArch(Graphics g, double phase, float c, Color hot, Color mid, Color outer, float bright, bool top, bool soft)
+    {
+        int lanes = top ? 4 : 2;
+        float squash = top ? 0.98f : 0.82f;
+        const int n = 28;
+        // A soft glow first, so the arch reads as one band of light.
+        if (soft) using (Pen glowPen = new Pen(mid, top ? 7f : 3.5f))
+        {
+            Pen soft2 = glowPen;
+            soft2.StartCap = soft2.EndCap = LineCap.Round;
+            float r = c + (top ? 6.5f : 3.2f);
+            for (int i = 0; i < n; i += 2)
+            {
+                double u = (double)i / n, v2 = (double)(i + 2) / n;
+                double a = top ? Math.PI * (1.02 + 0.96 * u) : Math.PI * (0.04 + 0.92 * u);
+                double b = top ? Math.PI * (1.02 + 0.96 * v2) : Math.PI * (0.04 + 0.92 * v2);
+                soft2.Color = Color.FromArgb(Clamp(85 * bright * Math.Pow(Math.Sin(Math.PI * u), 0.6)), mid);
+                g.DrawLine(soft2, (float)(Math.Cos(a) * r), (float)(Math.Sin(a) * r * squash), (float)(Math.Cos(b) * r), (float)(Math.Sin(b) * r * squash));
+            }
+        }
+        if (soft) return;
+        for (int l = 0; l < lanes; l++)
+        {
+            float r = c + (top ? 2.3f + l * 2.7f : 1.9f + l * 1.6f);
+            float heat = 1 - (float)l / lanes;
+            Color col = heat > 0.5f ? Blend(mid, hot, (heat - 0.5f) * 2) : Blend(outer, mid, heat * 2);
+            float v = bright * (0.4f + 0.6f * heat);
+            DrawLane(g, phase, l + 4, -r, -r * squash, 2 * r, 2 * r * squash, top ? 184 : 8, top ? 172 : 164, col, v, 1.5f + heat * 0.8f, true);
+        }
     }
 
     // The accretion ring as short strokes round a tilted ellipse, brighter
