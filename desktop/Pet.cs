@@ -596,7 +596,9 @@ public class PetForm : Form
         g.Restore(saved);
 
         float top = cy - 34 * Zoom;
-        if ((mood == Mood.Working || mood == Mood.Thinking) && working > 1) DrawCount(g, cx, top);
+        // The count includes runs out of sight, such as a chat left going
+        // behind the Code tab, so two things running always read as two.
+        if ((mood == Mood.Working || mood == Mood.Thinking || mood == Mood.Hidden) && working + hiddenRuns > 1) DrawCount(g, cx, top);
         if (shown != null) DrawBubble(g, said, shown, cx, top);
     }
 
@@ -1208,7 +1210,7 @@ public class PetForm : Form
             g.FillEllipse(b, cx + 22, top - 4, 17, 17);
             StringFormat mid = new StringFormat();
             mid.Alignment = mid.LineAlignment = StringAlignment.Center;
-            g.DrawString(working.ToString(), f, Brushes.White, new RectangleF(cx + 22, top - 4, 17, 17), mid);
+            g.DrawString((working + hiddenRuns).ToString(), f, Brushes.White, new RectangleF(cx + 22, top - 4, 17, 17), mid);
         }
     }
 

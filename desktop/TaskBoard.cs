@@ -738,8 +738,12 @@ public class TaskBoard
         if (!watches.TryGetValue(proc, out w)) { w = new AppWatch(); watches[proc] = w; }
 
         // In ChatGPT a hidden page also loses its text box, which is how a
-        // window covered by others shows itself.
-        bool seen = !IsIconic(p.MainWindowHandle) && (proc != "ChatGPT" || composer);
+        // window covered by others shows itself. The Claude app's Code tab
+        // and the ChatGPT app's Codex mode are other views of the same
+        // window: a chat left running behind them is out of sight, not
+        // finished, so it waits as hidden until you come back to it.
+        bool seen = !IsIconic(p.MainWindowHandle) && (proc != "ChatGPT" || composer) && !codeTab && mode != "Codex";
+        if (proc == "claude") claudeChatShown = seen;
         if (!seen)
         {
             w.Away = true;
@@ -780,7 +784,7 @@ public class TaskBoard
             // A new chat is named by the app once its first reply is in, so
             // the name is read again at the end. Quiet when you are already
             // looking at that app.
-            if (w.Key != null) Upsert(w.Key, label, chat.Length > 0 ? chat : null, "done", "", app, InFront(proc));
+            if (w.Key != null) Upsert(w.Key, label, chat.Length > 0 ? chat : null, "done", "", app, proc == "claude" ? ChatInView() : InFront(proc));
             if (proc == "claude") claudeSeenDone = DateTime.Now;
         }
     }
@@ -1117,6 +1121,11 @@ public class TaskBoard
     readonly System.Collections.Concurrent.ConcurrentQueue<Dictionary<string, object>> accountQueue =
         new System.Collections.Concurrent.ConcurrentQueue<Dictionary<string, object>>();
 
+    // Whether you can see a Claude chat right now: the Claude app in front
+    // and showing a chat, not its Code tab. A finish there needs no alert.
+    volatile bool claudeChatShown;
+    bool ChatInView() { return claudeChatShown && InFront("claude"); }
+
     void AccountEvent(Dictionary<string, object> d)
     {
         string key = "acct:" + Str(d, "id");
@@ -1141,11 +1150,17 @@ public class TaskBoard
         if (twin != null)
         {
             // Out of sight on screen, finished on claude.ai: this is the news.
+            // Hidden means you were not looking at it, so it always alerts.
             if (state == "done" && (twin.State == "working" || twin.State == "hidden"))
             {
+                bool quiet = twin.State != "hidden" && ChatInView();
                 if (w != null && w.Key == twin.Key) { w.Running = false; w.Blind = false; }
-                Upsert(twin.Key, twin.Source, title, "done", "", twin.App, InFront("claude"));
+                Upsert(twin.Key, twin.Source, title, "done", "", twin.App, quiet);
             }
+            // claude.ai says it is still going, or going again, though the
+            // screen had it as finished: believe claude.ai.
+            else if ((state == "working" || state == "needs") && twin.State != "working" && twin.State != "hidden" && twin.State != state)
+                Upsert(twin.Key, twin.Source, title, state, "", twin.App, state == "working");
             // Either way the twin carries it; a row of the account's own,
             // made before the twin appeared, goes.
             bool dropped;
@@ -1156,7 +1171,7 @@ public class TaskBoard
 
         // Finished on screen in the last minute and a half, in front of you.
         if (state == "done" && (DateTime.Now - claudeSeenDone).TotalSeconds < 90) return;
-        Upsert(key, "Claude", title, state, Str(d, "url"), "claude", state == "done" && InFront("claude"));
+        Upsert(key, "Claude", title, state, Str(d, "url"), "claude", state == "done" && ChatInView());
     }
 
     // What you typed, without what the Claude desktop app wraps around it:
