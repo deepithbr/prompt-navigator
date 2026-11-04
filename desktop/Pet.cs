@@ -38,7 +38,6 @@ public class PetForm : Form
     // Voidling is drawn this much larger than its geometry below.
     const float Zoom = 1.3f;
 
-    static readonly Color Blue = Color.FromArgb(91, 157, 187);
     static readonly Color Gold = Color.FromArgb(255, 200, 70);
     static readonly Color Red = Color.FromArgb(226, 70, 58);
     static readonly Color Green = Color.FromArgb(127, 163, 127);
@@ -421,6 +420,7 @@ public class PetForm : Form
                 && !dismissed.Contains(Stamp(it)) && !alerts.Exists(delegate (TaskItem a) { return a.Key == it.Key; }))
                 alerts.Add(it);
         hiddenRuns = hidden;
+        Orbit(all, byKey, clock.Elapsed.TotalSeconds);
         if (working > 0 && was == 0) workingSince = clock.Elapsed.TotalSeconds;
         // Hidden by hand, it stays away until a task starts that was not
         // already running then.
@@ -615,9 +615,12 @@ public class PetForm : Form
         g.Restore(saved);
 
         float top = cy - 34 * Zoom;
-        // The count includes runs out of sight, such as a chat left going
-        // behind the Code tab, so two things running always read as two.
-        if ((mood == Mood.Working || mood == Mood.Thinking || mood == Mood.Hidden) && working + hiddenRuns > 1) DrawCount(g, cx, top);
+        // Past five planets, the rest are a small count by the disk's tip.
+        int more = extraPlanets;
+        if (more > 0)
+            using (Font f = new Font("Segoe UI", 10, FontStyle.Bold, GraphicsUnit.Pixel))
+            using (SolidBrush b = new SolidBrush(Color.FromArgb(220, Paper)))
+                g.DrawString("+" + more, f, b, cx - Span / 2f + 2, cy + 20);
         if (shown != null) DrawBubble(g, said, shown, cx, top);
     }
 
@@ -823,6 +826,9 @@ public class PetForm : Form
         }
         if (still) flow *= 0.4f;
         bright += 0.12f * attend;
+        // A planet reaching the void lights the gas for a moment.
+        Planet[] orbit = Planets();
+        bright += 0.4f * Swallow(orbit, t);
 
         float bob = (float)Math.Sin(t * 1.05) * (still ? 0.6f : 1.6f);
         float breath = (float)Math.Sin(t * 1.2) * 0.02f;
@@ -853,6 +859,8 @@ public class PetForm : Form
         bool racing = mood == Mood.Working || mood == Mood.Thinking;
         double lap = t * (mood == Mood.Thinking ? 4.2 : 2.6) * (still ? 0.5 : 1);
         if (racing) HotSpot(g, lap, rx, ry, true);
+        // The planets on the far side of their orbit, which the void hides.
+        DrawPlanets(g, orbit, t, tilt, c, true);
 
         // 2. Its light bent over the top of the void: the arch.
         DiskArch(g, phase, c, hot, mid, outer, bright, true, false);
@@ -873,13 +881,15 @@ public class PetForm : Form
         g.Restore(flat);
         DiskBand(g, phase, rx, ry, hot, mid, outer, bright, false, false);
         if (racing) HotSpot(g, lap, rx, ry, false);
+        // 6. The planets on the near side, crossing in front of it all.
+        DrawPlanets(g, orbit, t, tilt, c, false);
         g.Restore(level);
 
-        // A finish: a ripple of light rolling out, then again every few
-        // seconds for as long as the finish waits for you.
-        if (mood == Mood.Done && (burst || (since % 4.5) < 1.8))
+        // A finish: a ripple of light rolling out once the planet is in,
+        // then again every few seconds for as long as the finish waits.
+        if (mood == Mood.Done && (burst ? since >= Fall : (since % 4.5) < 1.8))
         {
-            double ph = burst ? Math.Min(1, since / 1.6) : (since % 4.5) / 1.8;
+            double ph = burst ? Math.Min(1, (since - Fall) / 1.6) : (since % 4.5) / 1.8;
             float r = c + 6 + (float)ph * 30;
             using (Pen p = new Pen(Color.FromArgb(Clamp(150 * (1 - ph) * (1 - ph)), BlueWhite), 1.3f))
                 g.DrawEllipse(p, -r, -r * 0.8f, 2 * r, 1.6f * r);
@@ -1220,17 +1230,229 @@ public class PetForm : Form
         return Color.FromArgb(a.A, (int)(a.R + (b.R - a.R) * k), (int)(a.G + (b.G - a.G) * k), (int)(a.B + (b.B - a.B) * k));
     }
 
-    void DrawCount(Graphics g, float cx, float top)
+    /* -------------------------------------------------------------- *
+     * Planets: one for each task that is running or waits on you
+     * -------------------------------------------------------------- */
+
+    // Each task still going is a small planet on a slow orbit, numbered as
+    // its row in the task list. When the task finishes, its planet spirals
+    // into the void, heated and stretched thin by the pull, and the gas
+    // flares as it goes in. A task that ends any other way (closed, lost,
+    // gone from the board) just fades, so a swallow always means a finish.
+    sealed class Planet
     {
-        // More than one task running: say how many.
-        using (SolidBrush b = new SolidBrush(Blue))
-        using (Font f = new Font("Segoe UI", 8, FontStyle.Bold))
+        public string Key, State = "working";
+        public int Number;
+        public bool Faint, Fell, Shown = true;
+        public double Born, Appear, Gone = -1;
+        public float Off, OffFrom;
+        public double OffAt = -100;
+        public Planet Copy() { return (Planet)MemberwiseClone(); }
+    }
+
+    const int MaxPlanets = 5;
+    const double Fall = 1.2, FadeOut = 0.6, Grow = 0.6, Ease = 1.0;
+    const double Omega = 2 * Math.PI / 24;      // one lap in 24 seconds
+    const float OrbitR = 31, OrbitRy = 10.5f, Incline = 15, PlanetR = 6.4f;
+    static readonly StringFormat Centre = MakeCentre();
+    readonly List<Planet> planets = new List<Planet>();
+    readonly object planetGate = new object();
+    volatile int extraPlanets;
+
+    static StringFormat MakeCentre()
+    {
+        StringFormat f = new StringFormat();
+        f.Alignment = f.LineAlignment = StringAlignment.Center;
+        return f;
+    }
+
+    // Brings the planets in line with the board: one per row the list shows
+    // under Needs you and Working, numbered in the list's order.
+    void Orbit(List<TaskItem> all, Dictionary<string, TaskItem> byKey, double now)
+    {
+        List<TaskItem> live = new List<TaskItem>();
+        for (int pass = 0; pass < 2; pass++)
+            foreach (TaskItem it in all)
+            {
+                if ((DateTime.Now - it.Updated).TotalHours >= 3) continue;
+                bool fits = pass == 0 ? it.State == "needs" : it.State == "working" || it.State == "hidden";
+                if (fits) live.Add(it);
+            }
+        lock (planetGate)
         {
-            g.FillEllipse(b, cx + 22, top - 4, 17, 17);
-            StringFormat mid = new StringFormat();
-            mid.Alignment = mid.LineAlignment = StringAlignment.Center;
-            g.DrawString((working + hiddenRuns).ToString(), f, Brushes.White, new RectangleF(cx + 22, top - 4, 17, 17), mid);
+            Dictionary<string, Planet> alive = new Dictionary<string, Planet>();
+            foreach (Planet p in planets) if (p.Gone < 0) alive[p.Key] = p;
+            HashSet<string> keep = new HashSet<string>();
+            for (int i = 0; i < live.Count; i++)
+            {
+                TaskItem it = live[i];
+                Planet p;
+                if (!alive.TryGetValue(it.Key, out p))
+                {
+                    p = new Planet();
+                    p.Key = it.Key; p.Born = p.Appear = now; p.Shown = false;
+                    planets.Add(p);
+                }
+                bool shown = i < MaxPlanets;
+                if (shown && !p.Shown) p.Appear = now;
+                p.Shown = shown;
+                p.State = it.State;
+                p.Faint = it.State == "hidden" && it.App != "claude";
+                p.Number = i + 1;
+                keep.Add(it.Key);
+            }
+            foreach (Planet p in planets)
+            {
+                if (p.Gone >= 0 || keep.Contains(p.Key)) continue;
+                TaskItem ended;
+                p.Gone = now;
+                p.Fell = p.Shown && byKey.TryGetValue(p.Key, out ended) && ended.State == "done";
+            }
+            planets.RemoveAll(delegate (Planet p) { return p.Gone >= 0 && now - p.Gone > (p.Fell ? Fall + 0.5 : FadeOut); });
+
+            // The planets shown share the orbit evenly, in the order they
+            // came, and ease to their new places when one comes or goes.
+            List<Planet> ring = planets.FindAll(delegate (Planet p) { return p.Gone < 0 && p.Shown; });
+            ring.Sort(delegate (Planet a, Planet b) { return a.Born.CompareTo(b.Born); });
+            for (int i = 0; i < ring.Count; i++)
+            {
+                Planet p = ring[i];
+                float want = (float)(2 * Math.PI * i / ring.Count);
+                if (p.OffAt < -50) { p.Off = p.OffFrom = want; p.OffAt = now - Ease; continue; }
+                if (Math.Abs(Wrap(want - p.Off)) < 1e-3) continue;
+                p.OffFrom = OffNow(p, now);
+                p.Off = want;
+                p.OffAt = now;
+            }
+            extraPlanets = Math.Max(0, live.Count - MaxPlanets);
         }
+    }
+
+    // A copy for the frame being drawn, so a Sync on the other thread
+    // never changes a planet halfway through.
+    Planet[] Planets()
+    {
+        lock (planetGate) return planets.ConvertAll(delegate (Planet p) { return p.Copy(); }).ToArray();
+    }
+
+    static float Wrap(double a)
+    {
+        while (a > Math.PI) a -= 2 * Math.PI;
+        while (a <= -Math.PI) a += 2 * Math.PI;
+        return (float)a;
+    }
+
+    static float OffNow(Planet p, double t)
+    {
+        double k = Math.Max(0, Math.Min(1, (t - p.OffAt) / Ease));
+        return p.OffFrom + Wrap(p.Off - p.OffFrom) * (float)(k * k * (3 - 2 * k));
+    }
+
+    // How much a planet arriving at the void lights the gas, 0 to 1.
+    static float Swallow(Planet[] orbit, double t)
+    {
+        float most = 0;
+        foreach (Planet p in orbit)
+        {
+            if (!p.Fell) continue;
+            double k = (t - p.Gone) / Fall;
+            double v = k < 0.6 ? 0 : k < 1 ? Math.Pow((k - 0.6) / 0.4, 2) : k < 1.4 ? 1 - (k - 1) / 0.4 : 0;
+            most = Math.Max(most, (float)v);
+        }
+        return most;
+    }
+
+    // Draws the planets on one side of their orbit: back, the far side,
+    // before the void so it hides them; otherwise the near side, last.
+    // The orbit is tipped a little off the disk so the two read apart.
+    void DrawPlanets(Graphics g, Planet[] orbit, double t, float tilt, float c, bool back)
+    {
+        if (orbit.Length == 0) return;
+        GraphicsState flat = g.Save();
+        g.RotateTransform(-tilt);           // upright, so the numbers read level
+        double turn = (tilt + Incline) * Math.PI / 180;
+        float cosT = (float)Math.Cos(turn), sinT = (float)Math.Sin(turn);
+        using (Font f = new Font("Segoe UI", 8.5f, FontStyle.Bold, GraphicsUnit.Pixel))
+            foreach (Planet p in orbit)
+            {
+                if (!p.Shown) continue;
+                double a = t * Omega + OffNow(p, t);
+                float reach = 1, alpha = 1, size = 1, stretch = 0;
+                if (p.Gone >= 0)
+                {
+                    double k = (t - p.Gone) / (p.Fell ? Fall : FadeOut);
+                    if (k >= 1) continue;
+                    if (p.Fell)
+                    {
+                        // Spiralling in, faster the closer it gets, as an
+                        // orbit does, and pulled long toward the void.
+                        a = p.Gone * Omega + OffNow(p, p.Gone) + 2.4 * Math.PI * k * k;
+                        reach = (float)(1 - 0.85 * k * k);
+                        stretch = (float)k;
+                        size = (float)(1 - 0.5 * k);
+                        alpha = (float)(k < 0.7 ? 1 : 1 - (k - 0.7) / 0.3);
+                    }
+                    else alpha = (float)(1 - k);
+                }
+                else
+                {
+                    double k = Math.Min(1, (t - p.Appear) / Grow);
+                    size = (float)(0.3 + 0.7 * k * (2 - k));
+                    alpha = (float)k;
+                }
+                double sin = Math.Sin(a);
+                if ((sin < 0) != back) continue;
+                float x0 = (float)Math.Cos(a) * OrbitR * reach, y0 = (float)sin * OrbitRy * reach;
+                float x = x0 * cosT - y0 * sinT, y = x0 * sinT + y0 * cosT;
+                float depth = 1 + 0.12f * (float)sin;   // nearer is a little larger
+                DrawPlanet(g, f, p, x, y, PlanetR * size * depth, alpha * (back ? 0.85f : 1f), stretch, t);
+            }
+        g.Restore(flat);
+    }
+
+    // One planet: lit on the side that faces the hot gas round the void,
+    // dark on the far side, with its number on the lit face.
+    void DrawPlanet(Graphics g, Font f, Planet p, float x, float y, float r, float alpha, float stretch, double t)
+    {
+        if (alpha <= 0.01f || r < 0.5f) return;
+        Color body, ink;
+        float glow = 1;
+        if (p.State == "needs")
+        {
+            body = Crimson; ink = Color.White;
+            glow = 0.65f + 0.35f * (float)(0.5 + 0.5 * Math.Sin(t * 2.6));
+        }
+        else if (p.Faint) { body = Blend(Gold2, Void, 0.5f); ink = Paper; glow = 0.7f; }
+        else { body = Gold2; ink = Void; }
+        if (stretch > 0) body = Blend(body, HotWhite, Math.Min(1, stretch * 1.4f));
+
+        GraphicsState s = g.Save();
+        g.TranslateTransform(x, y);
+        double toward = Math.Atan2(-y, -x);
+        if (stretch > 0)
+        {
+            float deg = (float)(toward * 180 / Math.PI);
+            g.RotateTransform(deg);
+            g.ScaleTransform(1 + 2.2f * stretch, 1 - 0.45f * stretch);
+            g.RotateTransform(-deg);
+        }
+        using (SolidBrush h = new SolidBrush(Color.FromArgb(Clamp(55 * alpha * glow), body)))
+            g.FillEllipse(h, -r - 1.6f, -r - 1.6f, 2 * r + 3.2f, 2 * r + 3.2f);
+        using (SolidBrush night = new SolidBrush(Color.FromArgb(Clamp(255 * alpha), Blend(body, Void, 0.55f))))
+            g.FillEllipse(night, -r, -r, 2 * r, 2 * r);
+        using (GraphicsPath disc = new GraphicsPath())
+        {
+            disc.AddEllipse(-r, -r, 2 * r, 2 * r);
+            g.SetClip(disc, CombineMode.Intersect);
+            float lx = (float)Math.Cos(toward) * r * 0.32f, ly = (float)Math.Sin(toward) * r * 0.32f;
+            using (SolidBrush day = new SolidBrush(Color.FromArgb(Clamp(255 * alpha * glow), body)))
+                g.FillEllipse(day, lx - 0.95f * r, ly - 0.95f * r, 1.9f * r, 1.9f * r);
+            g.ResetClip();
+        }
+        if (stretch <= 0 && alpha > 0.3f)
+            using (SolidBrush b = new SolidBrush(Color.FromArgb(Clamp(255 * alpha), ink)))
+                g.DrawString(p.Number.ToString(), f, b, new RectangleF(-r - 3, -r - 3, 2 * r + 6, 2 * r + 6), Centre);
+        g.Restore(s);
     }
 
     void DrawBubble(Graphics g, Mood mood, TaskItem it, float cx, float top)
