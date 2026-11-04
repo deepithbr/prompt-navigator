@@ -34,7 +34,9 @@ public class PetForm : Form
 
     // The canvas, in pixels at 100% scaling. The core sits bottom right and
     // the bubble above it, so the window can hug the screen corner.
-    const int W = 300, H = 200, Span = 84;
+    const int W = 300, H = 200, Span = 110;
+    // Voidling is drawn this much larger than its geometry below.
+    const float Zoom = 1.3f;
 
     static readonly Color Blue = Color.FromArgb(91, 157, 187);
     static readonly Color Gold = Color.FromArgb(255, 200, 70);
@@ -325,7 +327,7 @@ public class PetForm : Form
         Point c = PointToClient(Cursor.Position);
         float x = c.X / scale, y = c.Y / scale;
         float cx = W - 8 - Span / 2f, cy = H - 8 - Span / 2f;
-        bool onIt = pressed || bubbleBox.Contains(x, y) || (x - cx) * (x - cx) + (y - cy) * (y - cy) < 38 * 38;
+        bool onIt = pressed || bubbleBox.Contains(x, y) || (x - cx) * (x - cx) + (y - cy) * (y - cy) < 50 * 50;
         if (onIt == !passing) return;
         passing = !onIt;
         int ex = GetWindowLong(Handle, ExStyle);
@@ -554,7 +556,7 @@ public class PetForm : Form
         DrawHole(g, t, mood, t - alertAt);
         g.Restore(saved);
 
-        float top = cy - 34;
+        float top = cy - 34 * Zoom;
         if ((mood == Mood.Working || mood == Mood.Thinking) && working > 1) DrawCount(g, cx, top);
         if (shown != null) DrawBubble(g, mood, shown, cx, top);
     }
@@ -739,15 +741,18 @@ public class PetForm : Form
             case Mood.Working:
                 bright = 0.95f + 0.05f * (float)Math.Sin(t * 2); flow = 1f; hot = HotWhite; mid = Gold2; outer = Amber; break;
             case Mood.Done:
+                // Finished: the gas turns cool blue-white and all but stops,
+                // and stays that way until you look. Still and blue means
+                // done; moving and gold means working; red means it needs you.
+                hot = Color.FromArgb(236, 244, 255); mid = BlueWhite; outer = Color.FromArgb(112, 150, 226);
                 if (burst)
                 {
-                    // The flare: blue-white light rushing out, easing back to gold.
+                    // The flare: a rush of light that settles into stillness.
                     float k = (float)Math.Min(1, since / 3);
-                    hot = Blend(BlueWhite, HotWhite, k); mid = Blend(BlueWhite, Gold2, k); outer = Blend(Color.FromArgb(120, 160, 230), Amber, k);
-                    bright = 1.1f - 0.2f * k; flow = 1.4f - 0.6f * k;
+                    bright = 1.15f - 0.35f * k; flow = 1.2f - 1.08f * k;
                     if (since < 1.4) lift = 5 * (float)Math.Sin(since / 1.4 * Math.PI);
                 }
-                else { hot = HotWhite; mid = Gold2; outer = Amber; bright = 0.8f; flow = 0.6f; }
+                else { bright = 0.78f + 0.06f * (float)Math.Sin(t * 1.1); flow = 0.12f; }
                 break;
             case Mood.Needs:
                 // The gas cools to crimson and its light breathes slowly.
@@ -762,6 +767,7 @@ public class PetForm : Form
         float bob = (float)Math.Sin(t * 1.05) * (still ? 0.6f : 1.6f);
         float breath = (float)Math.Sin(t * 1.2) * 0.02f;
         g.TranslateTransform(0, bob - lift);
+        g.ScaleTransform(Zoom, Zoom);
 
         // A wide, faint glow of scattered light.
         Blit(g, Glow(mid, 0.42f * bright), -GlowR, -GlowR, 2 * GlowR, 2 * GlowR);
@@ -784,6 +790,9 @@ public class PetForm : Form
 
         // 1. The far half of the disk, behind everything.
         DiskBand(g, phase, rx, ry, hot, mid, outer, bright * 0.8f, true, false);
+        bool racing = mood == Mood.Working || mood == Mood.Thinking;
+        double lap = t * (mood == Mood.Thinking ? 4.2 : 2.6) * (still ? 0.5 : 1);
+        if (racing) HotSpot(g, lap, rx, ry, true);
 
         // 2. Its light bent over the top of the void: the arch.
         DiskArch(g, phase, c, hot, mid, outer, bright, true, false);
@@ -803,12 +812,14 @@ public class PetForm : Form
         Blit(g, haze[1], -HazeW / 2, -HazeTop, HazeW, HazeH);
         g.Restore(flat);
         DiskBand(g, phase, rx, ry, hot, mid, outer, bright, false, false);
+        if (racing) HotSpot(g, lap, rx, ry, false);
         g.Restore(level);
 
-        // A finish: one ripple of light rolling out.
-        if (burst)
+        // A finish: a ripple of light rolling out, then again every few
+        // seconds for as long as the finish waits for you.
+        if (mood == Mood.Done && (burst || (since % 4.5) < 1.8))
         {
-            double ph = Math.Min(1, since / 1.6);
+            double ph = burst ? Math.Min(1, since / 1.6) : (since % 4.5) / 1.8;
             float r = c + 6 + (float)ph * 30;
             using (Pen p = new Pen(Color.FromArgb(Clamp(150 * (1 - ph) * (1 - ph)), BlueWhite), 1.3f))
                 g.DrawEllipse(p, -r, -r * 0.8f, 2 * r, 1.6f * r);
@@ -828,6 +839,26 @@ public class PetForm : Form
     }
 
     static int Clamp(double v) { return v < 0 ? 0 : v > 255 ? 255 : (int)v; }
+
+    // While it works, one bright knot of gas races round the disk with a
+    // short tail: unmistakably busy, even from across the room. The far
+    // half of its lap is drawn before the void, which hides it as it passes
+    // behind; the near half after.
+    static void HotSpot(Graphics g, double lap, float rx, float ry, bool back)
+    {
+        float r = rx * 0.66f, rr = ry * 0.8f;
+        for (int i = 5; i >= 0; i--)
+        {
+            double a = lap - i * 0.16;
+            if ((Math.Sin(a) < 0) != back) continue;
+            float x = (float)Math.Cos(a) * r, y = (float)Math.Sin(a) * rr;
+            float fade = 1 - i / 6f, size = 1.6f + 2.4f * fade;
+            using (SolidBrush halo = new SolidBrush(Color.FromArgb(Clamp(80 * fade), Gold2)))
+                g.FillEllipse(halo, x - size * 1.4f, y - size * 1.4f, size * 2.8f, size * 2.8f);
+            using (SolidBrush b = new SolidBrush(Color.FromArgb(Clamp(255 * fade), HotWhite)))
+                g.FillEllipse(b, x - size / 2, y - size / 2, size, size);
+        }
+    }
 
     // A cached image drawn at its own pixel size: no smoothing pass needed.
     static void Blit(Graphics g, Bitmap b, float x, float y, float w, float h)
@@ -858,7 +889,7 @@ public class PetForm : Form
         pair = new Bitmap[2];
         for (int k = 0; k < 2; k++)
         {
-            int w = (int)Math.Ceiling(HazeW * scale), h = (int)Math.Ceiling(HazeH * scale);
+            int w = (int)Math.Ceiling(HazeW * scale * Zoom), h = (int)Math.Ceiling(HazeH * scale * Zoom);
             Bitmap bmp = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
             bmp.SetResolution(96, 96);
             using (Graphics g = Graphics.FromImage(bmp))
@@ -1104,7 +1135,7 @@ public class PetForm : Form
         if (glows.TryGetValue(key, out b)) return b;
         if (glows.Count > 200) { foreach (Bitmap old in glows.Values) old.Dispose(); glows.Clear(); }
 
-        int px = (int)Math.Ceiling(2 * GlowR * scale);
+        int px = (int)Math.Ceiling(2 * GlowR * scale * Zoom);
         b = new Bitmap(px, px, PixelFormat.Format32bppPArgb);
         b.SetResolution(96, 96);
         using (Graphics g = Graphics.FromImage(b))

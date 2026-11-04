@@ -101,7 +101,7 @@ If its notifications never appear, check Windows **Do not disturb**, the bell ic
 
 **The desk pet**
 
-Voidling, a small black hole, sits in the bottom-right corner of the screen, above the taskbar, and shows what the board knows without opening it. It is drawn from how a black hole looks: a flat disk of hot gas seen nearly edge-on, its near half crossing in front of the void, the far half's light bent into an arch over the top and a thin band under the bottom, a bright ring hugging the void, and the side of the disk turning toward you brighter than the other. It has no face; its mood is in the disk's colour, brightness and flow. Do not disturb does not hide it, and it does not go away after six seconds the way a banner does.
+Voidling, a small black hole, sits in the bottom-right corner of the screen, above the taskbar, and shows what the board knows without opening it. It is drawn from how a black hole looks: a flat disk of hot gas seen nearly edge-on, its near half crossing in front of the void, the far half's light bent into an arch over the top and a thin band under the bottom, a bright ring hugging the void, and the side of the disk turning toward you brighter than the other. It has no face; its mood is in the disk's colour, brightness and flow, and reads from across the room: moving and gold means working, blue and still means done, red means it needs you. Do not disturb does not hide it, and it does not go away after six seconds the way a banner does.
 
 ![Voidling resting, noticing you, in deep rest, swallowing a mote, hidden, thinking, working, after a finish, and when a task needs you](docs/screenshots/pet-states.png)
 
@@ -111,9 +111,9 @@ Voidling, a small black hole, sits in the bottom-right corner of the screen, abo
 | A little brighter, the disk turned your way | The pointer comes near |
 | Now and then a mote of gas falls in along the disk | Resting or working |
 | Faint and nearly still | A run is going in an app you cannot see, minimized or covered |
-| Hot white-gold, the gas racing, the void a little tighter | The first seconds of a run |
-| Hot white-gold, flowing steadily, with a count if more than one task runs | Any Claude or ChatGPT task is working |
-| A blue-white flare easing back to gold, a ripple of light, and a green bubble naming the task | A task finished while you were in another app |
+| Hot white-gold, a bright knot of gas racing round the disk fast, the void a little tighter | The first seconds of a run |
+| Hot white-gold, with one bright knot of gas and its tail racing round the disk, and a count if more than one task runs | Any Claude or ChatGPT task is working |
+| A blue-white flare that settles into cool blue and stillness, a ripple of light every few seconds until you look, and a green bubble naming the task | A task finished while you were in another app |
 | The gas cooled to a deep crimson, its light breathing slowly, and an orange bubble | A task needs your approval or answer |
 
 It draws one frame per screen refresh, timed to Windows' own screen updates: 60 a second on a 60 Hz screen, 60 or 72 on a faster one, half that on battery saver. Every movement is continuous, with nothing that jumps or flickers. With Windows' Animation effects off it moves more gently, at the same frame rate. The bubble stays until you click Voidling, which opens that task's conversation. Clicking it with no bubble opens the task list. A Claude Code task that finishes while the Claude app is in front gets a four-second flash and no sound, so a session in front of you does not nag. Drag it anywhere; it keeps the spot. The cross at the bubble's top right puts that one alert away without opening anything. Only Voidling and its bubble take clicks; the faint motes around it let clicks through to whatever is below. It holds back over full-screen apps and presentations, draws half its motes on battery saver, and all but stops moving when Windows' **Show animations** is off. Right-click for **Tasks**, **Dismiss all**, **Sound** and **Hide until the next task**.
