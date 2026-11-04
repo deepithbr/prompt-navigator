@@ -227,18 +227,98 @@ public class TaskBoard
         return app == "claude" ? "claude" : app == "chatgpt" ? "ChatGPT" : app == "brave" ? "brave" : null;
     }
 
+    // Open the conversation a task belongs to, as closely as each app allows.
+    //
+    //   Brave        the window whose tab shows that chat, or else the chat's
+    //                address opened in Brave
+    //   Codex, Work  the thread itself, through the app's codex://threads/ link
+    //   apps         the app's window, started if it was closed to the tray;
+    //                a plain ChatGPT chat or a Claude app chat cannot be named,
+    //                because neither app says which one it was
     public void Open(TaskItem it)
     {
         if (it == null) return;
+        string url = it.Url ?? "";
+        try
+        {
+            if (it.App == "brave")
+            {
+                IntPtr w = WindowTitled("brave", it.Title);
+                if (w != IntPtr.Zero) { Front(w); return; }
+                string brave = BravePath();
+                if (url.StartsWith("https://") && brave != null) { Process.Start(brave, "\"" + url + "\""); return; }
+            }
+            else if (url.StartsWith("codex://"))
+            {
+                Process.Start(url);
+                return;
+            }
+        }
+        catch (Exception e) { Log("open " + it.Key + ": " + e.Message); }
+
         string proc = ProcessFor(it.App);
         if (proc == null) return;
         foreach (Process p in Process.GetProcessesByName(proc))
         {
             if (p.MainWindowHandle == IntPtr.Zero) continue;
-            ShowWindow(p.MainWindowHandle, 9);
-            SetForegroundWindow(p.MainWindowHandle);
+            Front(p.MainWindowHandle);
             return;
         }
+        // No window: closed to the tray. Each app's own link brings it back.
+        try
+        {
+            if (proc == "ChatGPT") Process.Start("codex://launch");
+            else if (proc == "claude") Process.Start("claude://claude.ai/new");
+        }
+        catch { }
+    }
+
+    static void Front(IntPtr w)
+    {
+        if (IsIconic(w)) ShowWindow(w, 9);
+        SetForegroundWindow(w);
+    }
+
+    delegate bool EnumProc(IntPtr h, IntPtr l);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr l);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+
+    // A top-level window of the app whose title begins with the chat's name,
+    // which in a browser means the chat is that window's open tab.
+    static IntPtr WindowTitled(string proc, string title)
+    {
+        if (string.IsNullOrEmpty(title)) return IntPtr.Zero;
+        HashSet<uint> pids = new HashSet<uint>();
+        foreach (Process p in Process.GetProcessesByName(proc)) pids.Add((uint)p.Id);
+        IntPtr found = IntPtr.Zero;
+        EnumWindows(delegate (IntPtr h, IntPtr l)
+        {
+            uint pid;
+            GetWindowThreadProcessId(h, out pid);
+            if (!pids.Contains(pid) || !IsWindowVisible(h)) return true;
+            StringBuilder s = new StringBuilder(512);
+            GetWindowText(h, s, 512);
+            if (s.ToString().StartsWith(title, StringComparison.OrdinalIgnoreCase)) { found = h; return false; }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    static string BravePath()
+    {
+        try
+        {
+            using (Microsoft.Win32.RegistryKey k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\brave.exe"))
+                if (k != null)
+                {
+                    string p = k.GetValue("") as string;
+                    if (!string.IsNullOrEmpty(p) && File.Exists(p)) return p;
+                }
+        }
+        catch { }
+        string fallback = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"BraveSoftware\Brave-Browser\Application\brave.exe");
+        return File.Exists(fallback) ? fallback : null;
     }
 
     /* -------------------------------------------------------------- *
@@ -626,7 +706,7 @@ public class TaskBoard
             codexPrimed = true;
             foreach (Follow fo in follows.Values)
                 if (fo.Running && fo.Key != null && (DateTime.Now - fo.StartedAt).TotalHours < 3)
-                    Upsert(fo.Key, fo.Label, CodexTitle(root, fo), "working", "", "chatgpt", true);
+                    Upsert(fo.Key, fo.Label, CodexTitle(root, fo), "working", "codex://threads/" + fo.Id, "chatgpt", true);
         }
     }
 
@@ -681,19 +761,19 @@ public class TaskBoard
             fo.Key = "cx:" + fo.Id + ":" + at.Ticks;
             if (!codexPrimed) return;
             AdoptChatGptRun();
-            Upsert(fo.Key, fo.Label, CodexTitle(root, fo), "working", "", "chatgpt", false);
+            Upsert(fo.Key, fo.Label, CodexTitle(root, fo), "working", "codex://threads/" + fo.Id, "chatgpt", false);
         }
         else if (type == "task_complete" || type == "turn_aborted")
         {
             fo.Running = false;
             // A run you stopped yourself is not news.
             if (codexPrimed && fo.Key != null)
-                Upsert(fo.Key, fo.Label, CodexTitle(root, fo), "done", "", "chatgpt", type == "turn_aborted" || InFront("ChatGPT"));
+                Upsert(fo.Key, fo.Label, CodexTitle(root, fo), "done", "codex://threads/" + fo.Id, "chatgpt", type == "turn_aborted" || InFront("ChatGPT"));
         }
         else if (type.Contains("approval_request") || type.StartsWith("request_user_input") || type.Contains("elicitation"))
         {
             if (codexPrimed && fo.Key != null)
-                Upsert(fo.Key, fo.Label, CodexTitle(root, fo), "needs", "", "chatgpt", InFront("ChatGPT"));
+                Upsert(fo.Key, fo.Label, CodexTitle(root, fo), "needs", "codex://threads/" + fo.Id, "chatgpt", InFront("ChatGPT"));
         }
     }
 
