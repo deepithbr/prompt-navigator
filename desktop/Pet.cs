@@ -30,7 +30,7 @@ using System.Windows.Forms;
 
 public class PetForm : Form
 {
-    enum Mood { Resting, Working, Done, Needs }
+    enum Mood { Resting, Hidden, Thinking, Working, Done, Needs }
 
     // The canvas, in pixels at 100% scaling. The core sits bottom right and
     // the bubble above it, so the window can hug the screen corner.
@@ -71,8 +71,29 @@ public class PetForm : Form
 
     // The bubble's close cross, in canvas pixels; empty with no bubble.
     RectangleF closeBox = RectangleF.Empty;
+    // The bubble itself, in canvas pixels; empty with no bubble.
+    RectangleF bubbleBox = RectangleF.Empty;
     bool overClose;
-    int lastWorking;
+    int lastWorking, hiddenRuns;
+    double workingSince = -100;
+    // Battery saver on: half the motes and ten frames a second.
+    bool battery;
+    // Windows' "Show animations in Windows" off: near-still, few frames.
+    bool still;
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct PowerStatus { public byte AC, Battery, Percent, SaverFlag; public int Life, Full; }
+    [DllImport("kernel32.dll")] static extern bool GetSystemPowerStatus(out PowerStatus s);
+    [DllImport("user32.dll")] static extern bool SystemParametersInfo(int action, int param, out bool value, int ini);
+
+    // Read now and then, not every frame: both change rarely.
+    void ReadSettings()
+    {
+        PowerStatus ps;
+        battery = GetSystemPowerStatus(out ps) && (ps.SaverFlag & 1) == 1;
+        bool animate;
+        still = SystemParametersInfo(0x1042 /* SPI_GETCLIENTAREAANIMATION */, 0, out animate, 0) && !animate;
+    }
     // Alerts put away by hand, as key@time, so a request that is still open
     // on the board does not come straight back; a newer one does.
     readonly HashSet<string> dismissed = new HashSet<string>();
@@ -146,12 +167,14 @@ public class PetForm : Form
             // The board's state also changes with time alone: a run silent
             // for hours stops counting. Read it again about once a second.
             if (++ticks % 10 == 0) Sync();
+            if (ticks % 50 == 1) ReadSettings();
             Fade();
-            if (Visible) Render();
+            if (Visible) { Render(); PassClicks(); }
             // Twenty frames a second only while something moves fast: a
-            // fade, the gold burst, a red pulse. Spinning and glowing read
-            // the same at ten, for half the drawing.
-            int want = Lively() ? 50 : 100;
+            // fade, the starlight burst, the warning flicker. Drifting and
+            // spinning read the same at ten, for half the drawing. With
+            // animations switched off in Windows, a frame now and then.
+            int want = still ? 400 : (Lively() && !battery) ? 50 : 100;
             if (tick.Interval != want) tick.Interval = want;
         };
         Load_();
@@ -219,6 +242,27 @@ public class PetForm : Form
 
     bool Busy() { return working > 0 || alerts.Count > 0 || flash != null; }
 
+    // Motes and glow drift out past the creature, and a layered window
+    // catches the mouse wherever it has drawn anything, so a faint mote over
+    // another app would take your click. Only the creature and its bubble
+    // take clicks; elsewhere the window lets them through to what is below.
+    [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int index);
+    [DllImport("user32.dll")] static extern int SetWindowLong(IntPtr h, int index, int value);
+    const int ExStyle = -20, ClickThrough = 0x20;
+    bool passing;
+
+    void PassClicks()
+    {
+        Point c = PointToClient(Cursor.Position);
+        float x = c.X / scale, y = c.Y / scale;
+        float cx = W - 8 - Span / 2f, cy = H - 8 - Span / 2f;
+        bool onIt = pressed || bubbleBox.Contains(x, y) || (x - cx) * (x - cx) + (y - cy) * (y - cy) < 38 * 38;
+        if (onIt == !passing) return;
+        passing = !onIt;
+        int ex = GetWindowLong(Handle, ExStyle);
+        SetWindowLong(Handle, ExStyle, passing ? ex | ClickThrough : ex & ~ClickThrough);
+    }
+
     bool Lively()
     {
         return leaving || fade < 1 || flash != null
@@ -275,6 +319,7 @@ public class PetForm : Form
     {
         List<TaskItem> all = board.Snapshot();
         Dictionary<string, TaskItem> byKey = new Dictionary<string, TaskItem>();
+        int was = working, hidden = 0;
         working = 0;
         foreach (TaskItem it in all)
         {
@@ -282,6 +327,7 @@ public class PetForm : Form
             // A Claude Code turn you interrupted never sends its stop, so a
             // task silent for three hours no longer counts as running.
             if (it.State == "working" && (DateTime.Now - it.Updated).TotalHours < 3) working++;
+            if (it.State == "hidden" && (DateTime.Now - it.Updated).TotalHours < 3) hidden++;
         }
         // Gone from the board, or started again, means you have been back to it.
         alerts.RemoveAll(delegate (TaskItem a)
@@ -295,6 +341,8 @@ public class PetForm : Form
             if (it.State == "needs" && (DateTime.Now - it.Updated).TotalHours < 3
                 && !dismissed.Contains(Stamp(it)) && !alerts.Exists(delegate (TaskItem a) { return a.Key == it.Key; }))
                 alerts.Add(it);
+        hiddenRuns = hidden;
+        if (working > 0 && was == 0) workingSince = clock.Elapsed.TotalSeconds;
         // Hidden by hand, it stays away until a task starts that was not
         // already running then.
         if (working > lastWorking) snoozed = false;
@@ -419,79 +467,254 @@ public class PetForm : Form
     void Draw(Graphics g, double t)
     {
         closeBox = RectangleF.Empty;
+        bubbleBox = RectangleF.Empty;
         if (flash != null && t >= flashUntil) flash = null;
         TaskItem shown = alerts.Count > 0 ? alerts[alerts.Count - 1] : flash;
         bool needs = alerts.Count > 0
             ? alerts.Exists(delegate (TaskItem a) { return a.State == "needs"; })
             : flash != null && flash.State == "needs";
         Mood mood = needs ? Mood.Needs : shown != null ? Mood.Done
-            : working > 0 ? Mood.Working : Mood.Resting;
+            : working > 0 ? (t - workingSince < 4 ? Mood.Thinking : Mood.Working)
+            : hiddenRuns > 0 ? Mood.Hidden : Mood.Resting;
 
         float cx = W - 8 - Span / 2f, cy = H - 8 - Span / 2f;
         GraphicsState saved = g.Save();
         g.TranslateTransform(cx, cy);
-        DrawCore(g, t, mood, t - alertAt);
+        DrawVoidling(g, t, mood, t - alertAt);
         g.Restore(saved);
 
         float top = cy - 34;
-        if (mood == Mood.Working && working > 1) DrawCount(g, cx, top);
+        if ((mood == Mood.Working || mood == Mood.Thinking) && working > 1) DrawCount(g, cx, top);
         if (shown != null) DrawBubble(g, mood, shown, cx, top);
     }
 
-    // The core, centred on the origin: a soft glow, an outer ring of eight
-    // segments, two inner arcs turning the other way, and a bright heart.
-    // Grey and slow at rest, blue and turning while a task works, a gold
-    // burst of rings when one finishes, a red pulse when one needs you.
-    void DrawCore(Graphics g, double t, Mood mood, double since)
+    // Voidling, centred on the origin: a tiny black hole with a tilted
+    // accretion ring, a few orbiting motes and two slits of light for eyes.
+    // The far half of the ring and of the motes is drawn before the core and
+    // the near half after it, so the void sits inside its own ring.
+    //
+    //   resting    slow drift, a dim indigo ring, a gentle bob
+    //   hidden     dimmer and slower still, eyes shut: a run you cannot see
+    //   thinking   the first seconds of a run: ring spins fast, core tightens
+    //   working    cyan ring, livelier motes, small energy arcs
+    //   done       a starlight ripple and sparkles, then a calm cyan glow
+    //   needs      a magenta ring that flickers and warps, eyes narrowed
+    static readonly Color Void = Color.FromArgb(5, 4, 12);
+    static readonly Color Cyan = Color.FromArgb(96, 226, 255);
+    static readonly Color Violet = Color.FromArgb(150, 112, 255);
+    static readonly Color Indigo = Color.FromArgb(80, 70, 205);
+    static readonly Color Magenta = Color.FromArgb(255, 74, 162);
+    static readonly Color Starlight = Color.FromArgb(242, 247, 255);
+
+    // Each mote: orbit size (times the ring), phase, speed, size, brightness.
+    static readonly float[][] Motes = MakeMotes(22);
+
+    static float[][] MakeMotes(int n)
     {
-        Color c = mood == Mood.Working ? Blue : mood == Mood.Done ? Gold : mood == Mood.Needs ? Red : Dim;
+        Random r = new Random(7);
+        float[][] m = new float[n][];
+        for (int i = 0; i < n; i++)
+            m[i] = new float[] { 0.78f + (float)r.NextDouble() * 0.6f, (float)(r.NextDouble() * Math.PI * 2),
+                0.6f + (float)r.NextDouble() * 0.9f, 1f + (float)r.NextDouble() * 1.4f, 0.4f + (float)r.NextDouble() * 0.6f };
+        return m;
+    }
+
+    void DrawVoidling(Graphics g, double t, Mood mood, double since)
+    {
         bool burst = mood == Mood.Done && since < 3;
-
-        // Degrees a second for the outer ring; the inner arcs run the other way, faster.
-        double speed = mood == Mood.Working ? 70 : burst ? 260 : mood == Mood.Done ? 30 : mood == Mood.Needs ? 110 : 6;
-        float spin = (float)(t * speed % 360);
-
-        float glow;
-        if (mood == Mood.Resting) glow = 0.25f + 0.1f * (float)Math.Sin(t * 1.2);
-        else if (mood == Mood.Working) glow = 0.55f + 0.1f * (float)Math.Sin(t * 3);
-        else if (mood == Mood.Done) glow = burst ? 1f : 0.7f + 0.1f * (float)Math.Sin(t * 2);
-        else glow = 0.45f + 0.55f * (float)Math.Abs(Math.Sin(t * 4));
-
-        // Glow: rings of falling alpha, since a layered window has no blur.
-        // Seven soft rings are the dearest thing in a frame, so each colour
-        // and strength is drawn once and reused.
-        Bitmap halo = Glow(c, glow);
-        g.DrawImage(halo, -GlowR, -GlowR, 2 * GlowR, 2 * GlowR);
-
-        // Shock rings: rolling outward for three seconds after a finish, and
-        // for as long as something needs you.
-        if (burst || mood == Mood.Needs)
-            using (Pen p = new Pen(c, 2f))
-                for (int w = 0; w < 3; w++)
-                {
-                    double ph = (t * (burst ? 1.6 : 1.1) + w / 3.0) % 1;
-                    float r = 30 + (float)ph * 11;
-                    p.Color = Color.FromArgb((int)(220 * (1 - ph)), c);
-                    g.DrawEllipse(p, -r, -r, 2 * r, 2 * r);
-                }
-
-        Color ring = mood == Mood.Resting ? Color.FromArgb(150, c) : c;
-        using (Pen outer = new Pen(ring, 3.2f))
-            for (int k = 0; k < 8; k++)
-                g.DrawArc(outer, -28, -28, 56, 56, spin + k * 45, 31);
-
-        using (Pen inner = new Pen(Blend(ring, Color.White, 0.2f), 2f))
+        float spin, core, ringR, energy, glow, wobble = 0, flicker = 1;
+        Color ring, halo;
+        switch (mood)
         {
-            inner.StartCap = inner.EndCap = LineCap.Round;
-            g.DrawArc(inner, -19, -19, 38, 38, -spin * 1.6f, 110);
-            g.DrawArc(inner, -19, -19, 38, 38, -spin * 1.6f + 180, 110);
+            case Mood.Hidden:
+                spin = 0.25f; core = 16; ringR = 33; energy = 0.15f; ring = Blend(Indigo, Void, 0.35f); halo = Indigo; glow = 0.12f; break;
+            case Mood.Thinking:
+                spin = 2.8f; core = 14f; ringR = 31; energy = 0.8f; ring = Violet; halo = Violet; glow = 0.5f; break;
+            case Mood.Working:
+                spin = 1.7f; core = 15.5f; ringR = 35; energy = 1f; ring = Cyan; halo = Blend(Cyan, Indigo, 0.4f);
+                glow = 0.5f + 0.08f * (float)Math.Sin(t * 3); break;
+            case Mood.Done:
+                spin = burst ? 2.2f : 0.7f; core = 16; ringR = 35; energy = 0.7f; ring = Blend(Cyan, Starlight, burst ? 0.5f : 0.15f);
+                halo = Cyan; glow = burst ? 0.6f : 0.42f + 0.05f * (float)Math.Sin(t * 2); break;
+            case Mood.Needs:
+                spin = 1.2f; core = 16; ringR = 34; energy = 0.8f; ring = Magenta; halo = Magenta;
+                // Unstable: a fast warp, and now and then a flicker.
+                wobble = 2.6f * (float)Math.Sin(t * 13) * (float)Math.Sin(t * 2.3);
+                flicker = ((int)(t * 9) % 7 == 0) ? 0.45f : 1f;
+                glow = 0.45f + 0.35f * (float)Math.Abs(Math.Sin(t * 3.5)); break;
+            default:
+                spin = 0.5f; core = 16; ringR = 34; energy = 0.35f; ring = Blend(Indigo, Violet, 0.3f); halo = Indigo;
+                glow = 0.28f + 0.06f * (float)Math.Sin(t * 1.2); break;
         }
 
-        float beat = mood == Mood.Needs ? glow : mood == Mood.Resting ? 0.6f + 0.25f * (float)Math.Sin(t * 1.2) : 1f;
-        using (SolidBrush b = new SolidBrush(Color.FromArgb((int)(255 * Math.Min(1, beat + 0.15f)), Blend(c, Color.White, 0.3f))))
-            g.FillEllipse(b, -11, -11, 22, 22);
-        using (SolidBrush b = new SolidBrush(Color.FromArgb((int)(230 * beat), Color.White)))
-            g.FillEllipse(b, -5, -5, 10, 10);
+        // Weightless: a slow bob, a little more when idle.
+        float bob = (float)Math.Sin(t * 1.1) * (mood == Mood.Resting || mood == Mood.Hidden ? 2.2f : 1.2f);
+        g.TranslateTransform(0, bob);
+
+        // Halo, from the shared glow cache.
+        Bitmap h = Glow(halo, glow);
+        g.DrawImage(h, -GlowR, -GlowR, 2 * GlowR, 2 * GlowR);
+
+        // A lit rim far from the core keeps the void visible on a dark page.
+        float a0 = (float)(t * spin);
+        GraphicsState level = g.Save();
+        g.RotateTransform(-16 + wobble);
+        float rx = ringR, ry = ringR * 0.34f + wobble * 0.3f;
+        DrawRing(g, a0, rx, ry, ring, flicker, true);
+        DrawMotes(g, t, a0, rx, ry, ring, energy, flicker, true);
+        g.Restore(level);
+
+        // The void: black, with a thin photon rim and a faint lens circle.
+        using (SolidBrush b = new SolidBrush(Void)) g.FillEllipse(b, -core, -core, 2 * core, 2 * core);
+        using (Pen rim = new Pen(Color.FromArgb((int)(230 * flicker), Blend(ring, Starlight, 0.35f)), 1.6f))
+            g.DrawEllipse(rim, -core - 0.6f, -core - 0.6f, 2 * core + 1.2f, 2 * core + 1.2f);
+        using (Pen lens = new Pen(Color.FromArgb(40, Starlight), 1f))
+            g.DrawEllipse(lens, -core - 4, -core - 4, 2 * core + 8, 2 * core + 8);
+        // The far side of the ring, its light bent up and over the void: the
+        // thin bright arc that makes it read as a black hole, not a planet.
+        using (Pen bent = new Pen(Color.FromArgb((int)(150 * flicker), Blend(ring, Starlight, 0.25f)), 2.2f))
+        {
+            bent.StartCap = bent.EndCap = LineCap.Round;
+            g.DrawArc(bent, -core - 2.6f, -core - 2.6f, 2 * core + 5.2f, 2 * core + 5.2f, 196, 148);
+        }
+
+        DrawEyes(g, t, mood, core);
+
+        level = g.Save();
+        g.RotateTransform(-16 + wobble);
+        DrawRing(g, a0, rx, ry, ring, flicker, false);
+        DrawMotes(g, t, a0, rx, ry, ring, energy, flicker, false);
+        if (mood == Mood.Working || mood == Mood.Thinking) DrawArcs(g, t, rx, ry, core, ring);
+        g.Restore(level);
+
+        if (burst) DrawStarlight(g, t, since, core);
+    }
+
+    // The accretion ring as short strokes round a tilted ellipse, brighter
+    // on the side turning toward you. back: the far half, behind the void.
+    static void DrawRing(Graphics g, float a0, float rx, float ry, Color c, float flicker, bool back)
+    {
+        const int n = 56;
+        using (Pen soft = new Pen(Color.FromArgb((int)(60 * flicker), c), back ? 4f : 6f))
+        {
+            soft.StartCap = soft.EndCap = LineCap.Round;
+            for (int i = 0; i < n; i += 2)
+            {
+                double a = 2 * Math.PI * i / n, b = 2 * Math.PI * (i + 2) / n;
+                if ((Math.Sin(a) < 0) != back) continue;
+                g.DrawLine(soft, (float)(Math.Cos(a) * rx), (float)(Math.Sin(a) * ry), (float)(Math.Cos(b) * rx), (float)(Math.Sin(b) * ry));
+            }
+        }
+        using (Pen p = new Pen(c, back ? 1.6f : 2.2f))
+        {
+            p.StartCap = p.EndCap = LineCap.Round;
+            for (int i = 0; i < n; i++)
+            {
+                double a = 2 * Math.PI * i / n, b = 2 * Math.PI * (i + 1) / n;
+                if ((Math.Sin(a) < 0) != back) continue;
+                double lit = 0.35 + 0.65 * (0.5 - 0.5 * Math.Cos(a + a0 * 0.15));
+                // Light trails: a few brighter streaks that run round the ring.
+                double streak = Math.Max(0, Math.Cos(3 * a - a0 * 2));
+                int alpha = (int)(255 * flicker * Math.Min(1, (back ? 0.55 : 1) * (lit + 0.35 * streak * streak)));
+                p.Color = Color.FromArgb(Math.Max(0, Math.Min(255, alpha)), c);
+                g.DrawLine(p, (float)(Math.Cos(a) * rx), (float)(Math.Sin(a) * ry), (float)(Math.Cos(b) * rx), (float)(Math.Sin(b) * ry));
+            }
+        }
+    }
+
+    // Motes in orbit, pulled round with the ring; livelier as energy rises.
+    void DrawMotes(Graphics g, double t, float a0, float rx, float ry, Color c, float energy, float flicker, bool back)
+    {
+        int n = battery ? Motes.Length / 2 : Motes.Length;
+        for (int i = 0; i < n; i++)
+        {
+            float[] m = Motes[i];
+            double a = m[1] + a0 * m[2] * (0.6 + energy);
+            if ((Math.Sin(a) < 0) != back) continue;
+            float x = (float)(Math.Cos(a) * rx * m[0]), y = (float)(Math.Sin(a) * ry * m[0]);
+            float s = m[3] * (0.8f + 0.4f * energy);
+            int alpha = (int)(255 * flicker * m[4] * (0.25 + 0.75 * energy) * (back ? 0.5 : 1));
+            Color tint = i % 4 == 0 ? Starlight : c;
+            using (SolidBrush b = new SolidBrush(Color.FromArgb(Math.Max(0, Math.Min(255, alpha)), tint)))
+                g.FillEllipse(b, x - s / 2, y - s / 2, s, s);
+        }
+    }
+
+    // Two small energy arcs leaping from the ring toward the void while it
+    // works, a new pair every eighth of a second.
+    static void DrawArcs(Graphics g, double t, float rx, float ry, float core, Color c)
+    {
+        Random r = new Random((int)(t * 8));
+        using (Pen p = new Pen(Color.FromArgb(200, Blend(c, Starlight, 0.4f)), 1.1f))
+            for (int k = 0; k < 2; k++)
+            {
+                double a = r.NextDouble() * Math.PI * 2;
+                PointF from = new PointF((float)(Math.Cos(a) * rx), (float)(Math.Sin(a) * ry));
+                PointF to = new PointF(from.X * (core + 3) / rx, from.Y * 0.4f);
+                PointF mid = new PointF((from.X + to.X) / 2 + (float)(r.NextDouble() * 6 - 3), (from.Y + to.Y) / 2 + (float)(r.NextDouble() * 6 - 3));
+                g.DrawLines(p, new[] { from, mid, to });
+            }
+    }
+
+    // Eyes: two soft slits of light on the void, minimal on purpose.
+    static void DrawEyes(Graphics g, double t, Mood mood, float core)
+    {
+        float ex = core * 0.4f, ey = -core * 0.08f, w = core * 0.36f;
+        using (Pen p = new Pen(Color.FromArgb(mood == Mood.Hidden ? 70 : 235, mood == Mood.Needs ? Color.FromArgb(255, 190, 220) : Color.FromArgb(200, 240, 255)), 1.8f))
+        {
+            p.StartCap = p.EndCap = LineCap.Round;
+            if (mood == Mood.Done)
+            {
+                // Content: the slits curve up.
+                g.DrawArc(p, -ex - w / 2, ey - 1, w, w * 0.7f, 200, 140);
+                g.DrawArc(p, ex - w / 2, ey - 1, w, w * 0.7f, 200, 140);
+                return;
+            }
+            float look = mood == Mood.Thinking ? (float)Math.Sin(t * 1.7) * core * 0.12f : 0;
+            bool blink = mood != Mood.Hidden && (t % 5.3) < 0.12;
+            if (mood == Mood.Needs)
+            {
+                // Alert, not angry: two thin slits tilted in a little.
+                g.DrawLine(p, -ex - w / 2, ey - 1.2f, -ex + w / 2, ey + 0.6f);
+                g.DrawLine(p, ex - w / 2, ey + 0.6f, ex + w / 2, ey - 1.2f);
+                return;
+            }
+            if (mood == Mood.Hidden || blink)
+            {
+                g.DrawLine(p, -ex - w / 2 + look, ey + 0.8f, -ex + w / 2 + look, ey + 0.8f);
+                g.DrawLine(p, ex - w / 2 + look, ey + 0.8f, ex + w / 2 + look, ey + 0.8f);
+                return;
+            }
+            using (SolidBrush b = new SolidBrush(p.Color))
+            {
+                g.FillEllipse(b, -ex - w / 2 + look, ey - 1.5f, w, 3f);
+                g.FillEllipse(b, ex - w / 2 + look, ey - 1.5f, w, 3f);
+            }
+        }
+    }
+
+    // The finish: two rippling rings of starlight and a few four-point stars.
+    static void DrawStarlight(Graphics g, double t, double since, float core)
+    {
+        for (int w = 0; w < 2; w++)
+        {
+            double ph = (since * 0.9 + w * 0.5) % 1;
+            float r = core + 5 + (float)ph * 26;
+            using (Pen p = new Pen(Color.FromArgb((int)(130 * (1 - ph) * (1 - ph)), Blend(Cyan, Starlight, 0.6f)), 1.2f))
+                g.DrawEllipse(p, -r, -r, 2 * r, 2 * r);
+        }
+        Random rnd = new Random(11);
+        for (int k = 0; k < 6; k++)
+        {
+            double a = rnd.NextDouble() * Math.PI * 2, d = 20 + rnd.NextDouble() * 18;
+            float twinkle = (float)Math.Max(0, Math.Sin(t * 6 + k * 1.3));
+            float x = (float)(Math.Cos(a) * d), y = (float)(Math.Sin(a) * d * 0.8), s = 2 + 3.5f * twinkle;
+            using (Pen p = new Pen(Color.FromArgb((int)(230 * twinkle), Starlight), 1f))
+            {
+                g.DrawLine(p, x - s, y, x + s, y);
+                g.DrawLine(p, x, y - s, x, y + s);
+            }
+        }
     }
 
     const float GlowR = 24 + 6 * 3.4f;
@@ -560,6 +783,7 @@ public class PetForm : Form
             float h = hint.Length > 0 ? 66 : 48;
             float right = W - 8, bottomY = Math.Max(4 + h, top - 8);
             RectangleF r = new RectangleF(right - w, bottomY - h, w, h);
+            bubbleBox = r;
 
             Color edge = mood == Mood.Needs ? Orange : Green;
             using (GraphicsPath path = Rounded(r, 8))

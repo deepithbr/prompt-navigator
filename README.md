@@ -101,20 +101,22 @@ If its notifications never appear, check Windows **Do not disturb**, the bell ic
 
 **The desk pet**
 
-An energy core sits in the bottom-right corner of the screen, above the taskbar, and shows what the board knows without opening it. Do not disturb does not hide it, and it does not go away after six seconds the way a banner does.
+Voidling, a small floating black hole with a tilted ring of light and two slits for eyes, sits in the bottom-right corner of the screen, above the taskbar, and shows what the board knows without opening it. Do not disturb does not hide it, and it does not go away after six seconds the way a banner does.
 
-![The core resting, working on two tasks, after a finish, and when a task needs you](docs/screenshots/pet-states.png)
+![Voidling resting, hidden, thinking, working on two tasks, after a finish, and when a task needs you](docs/screenshots/pet-states.png)
 
 | It shows | When |
 |---|---|
-| A dim grey ring, barely turning | Nothing is running |
-| Blue rings spinning, with a count if more than one task runs | Any Claude or ChatGPT task is working |
-| A gold burst of rings, then a steady gold glow, and a green bubble naming the task | A task finished while you were in another app |
-| A red pulse with rings rolling outward and an orange bubble | A task needs your approval or answer |
+| A slow indigo ring, drifting and bobbing | Nothing is running |
+| Dimmer and slower, eyes shut | A run is going in an app you cannot see, minimized or covered |
+| A fast violet ring and a tighter void | The first seconds of a run |
+| A cyan ring, livelier motes and small energy arcs, with a count if more than one task runs | Any Claude or ChatGPT task is working |
+| A ripple of starlight and a few sparkles, content eyes, and a green bubble naming the task | A task finished while you were in another app |
+| A magenta ring that flickers and warps, alert eyes, and an orange bubble | A task needs your approval or answer |
 
-The bubble stays until you click the core, which brings that task's app forward. Clicking it with no bubble opens the task list. A task that finishes in the app you are already looking at gets a four-second burst and no sound, so a Code session in front of you does not nag. Drag it anywhere; it keeps the spot. The cross at the bubble's top right dismisses it without opening anything. Right-click for **Tasks**, **Dismiss**, **Sound** and **Hide until the next task**.
+The bubble stays until you click Voidling, which opens that task's conversation. Clicking it with no bubble opens the task list. A Claude Code task that finishes while the Claude app is in front gets a four-second flash and no sound, so a session in front of you does not nag. Drag it anywhere; it keeps the spot. The cross at the bubble's top right puts that one alert away without opening anything. Only Voidling and its bubble take clicks; the faint motes around it let clicks through to whatever is below. It holds back over full-screen apps and presentations, draws half its motes on battery saver, and all but stops moving when Windows' **Show animations** is off. Right-click for **Tasks**, **Dismiss all**, **Sound** and **Hide until the next task**.
 
-By default the core only appears when there is something to show. It fades in when a task starts, finishes or needs you, and fades out once nothing has run and nothing has waited on you for 30 seconds. A finish you have not clicked keeps it on screen. The tray menu's **Pet** picks between **Show while a task runs**, **Always show** and **Never show**. Its position, sound and mode live in `%LOCALAPPDATA%\PromptAdvisor\pet.txt`.
+By default Voidling only appears when there is something to show. It fades in when a task starts, finishes or needs you, and fades out once nothing has run and nothing has waited on you for 30 seconds. A finish you have not clicked keeps it on screen. The tray menu's **Pet** picks between **Show while a task runs**, **Always show** and **Never show**. Its position, sound and mode live in `%LOCALAPPDATA%\PromptAdvisor\pet.txt`.
 
 ---
 
