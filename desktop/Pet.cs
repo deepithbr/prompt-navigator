@@ -170,7 +170,7 @@ public class PetForm : Form
         {
             // The board's state also changes with time alone: a run silent
             // for hours stops counting. Read it again about once a second.
-            if (++ticks % 10 == 0) Sync();
+            if (++ticks % 10 == 0) { Sync(); ClearSeen(); }
             if (ticks % 50 == 1) ReadSettings();
             Fade();
             if (Visible) PassClicks();
@@ -449,6 +449,31 @@ public class PetForm : Form
         }
     }
 
+    // A finish you have gone and looked at is not news any more. Once its
+    // app has been in front for about two seconds, after the alert came,
+    // the finish is put away as if you had clicked it. A request for your
+    // approval stays until it is answered.
+    readonly Dictionary<string, int> lookedAt = new Dictionary<string, int>();
+
+    void ClearSeen()
+    {
+        for (int i = alerts.Count - 1; i >= 0; i--)
+        {
+            TaskItem a = alerts[i];
+            if (a.State == "needs") continue;
+            int n;
+            lookedAt.TryGetValue(a.Key, out n);
+            n = InFront(a) ? n + 1 : 0;
+            if (n >= 4)
+            {
+                dismissed.Add(Stamp(a));
+                alerts.RemoveAt(i);
+                lookedAt.Remove(a.Key);
+            }
+            else lookedAt[a.Key] = n;
+        }
+    }
+
     static bool InFront(TaskItem it)
     {
         string proc = TaskBoard.ProcessFor(it.App);
@@ -537,18 +562,32 @@ public class PetForm : Form
         try { File.AppendAllText(Path.Combine(Path.GetTempPath(), "PromptAdvisor.log"), DateTime.Now.ToString("s") + "  pet could not draw (" + faults + " in a row): " + e.Message + Environment.NewLine); } catch { }
     }
 
+    // What Voidling looks like now, and which alert its bubble shows.
+    Mood PickMood(double t, out TaskItem shown)
+    {
+        if (flash != null && t >= flashUntil) flash = null;
+        shown = alerts.Count > 0 ? alerts[alerts.Count - 1] : flash;
+        bool needs = alerts.Count > 0
+            ? alerts.Exists(delegate (TaskItem a) { return a.State == "needs"; })
+            : flash != null && flash.State == "needs";
+        // Something running shows over a finish that is still waiting, once
+        // the finish has had its few seconds of flare: the bubble keeps
+        // saying what finished, the body says what is going on now.
+        bool flaring = shown != null && t - alertAt < 3;
+        Mood mood = needs ? Mood.Needs
+            : shown != null && (flaring || working == 0) ? Mood.Done
+            : working > 0 ? (t - workingSince < 4 ? Mood.Thinking : Mood.Working)
+            : hiddenRuns > 0 ? Mood.Hidden : Mood.Resting;
+        return mood;
+    }
+
     void Draw(Graphics g, double t)
     {
         closeBox = RectangleF.Empty;
         bubbleBox = RectangleF.Empty;
-        if (flash != null && t >= flashUntil) flash = null;
-        TaskItem shown = alerts.Count > 0 ? alerts[alerts.Count - 1] : flash;
-        bool needs = alerts.Count > 0
-            ? alerts.Exists(delegate (TaskItem a) { return a.State == "needs"; })
-            : flash != null && flash.State == "needs";
-        Mood mood = needs ? Mood.Needs : shown != null ? Mood.Done
-            : working > 0 ? (t - workingSince < 4 ? Mood.Thinking : Mood.Working)
-            : hiddenRuns > 0 ? Mood.Hidden : Mood.Resting;
+        TaskItem shown;
+        Mood mood = PickMood(t, out shown);
+        Mood said = shown == null ? mood : shown.State == "needs" ? Mood.Needs : Mood.Done;
 
         float cx = W - 8 - Span / 2f, cy = H - 8 - Span / 2f;
         GraphicsState saved = g.Save();
@@ -558,7 +597,7 @@ public class PetForm : Form
 
         float top = cy - 34 * Zoom;
         if ((mood == Mood.Working || mood == Mood.Thinking) && working > 1) DrawCount(g, cx, top);
-        if (shown != null) DrawBubble(g, mood, shown, cx, top);
+        if (shown != null) DrawBubble(g, said, shown, cx, top);
     }
 
     // Voidling, centred on the origin: a tiny black hole with a tilted
