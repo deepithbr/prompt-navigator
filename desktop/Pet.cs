@@ -78,7 +78,7 @@ public class PetForm : Form
     double workingSince = -100;
     // Battery saver on: half the motes and ten frames a second.
     bool battery;
-    // Windows' "Show animations in Windows" off: near-still, few frames.
+    // Windows' "Animation effects" off: slower, gentler motion, never fewer frames.
     bool still;
 
     [StructLayout(LayoutKind.Sequential)]
@@ -161,7 +161,9 @@ public class PetForm : Form
             Sync();
         };
 
-        tick.Interval = 16;
+        // The timer runs the pet's logic: fading, reading the board,
+        // passing clicks. Frames are drawn by FrameLoop, in step with the screen.
+        tick.Interval = 50;
         tick.Tick += delegate
         {
             // The board's state also changes with time alone: a run silent
@@ -169,16 +171,7 @@ public class PetForm : Form
             if (++ticks % 10 == 0) Sync();
             if (ticks % 50 == 1) ReadSettings();
             Fade();
-            if (Visible) { Render(); PassClicks(); }
-            // Twenty frames a second only while something moves fast: a
-            // fade, the starlight burst, the warning flicker. Drifting and
-            // spinning read the same at ten, for half the drawing. With
-            // animations switched off in Windows, a frame now and then.
-            // Windows' timer ticks every 15.6 ms and rounds an interval up to
-            // the next tick, so 50 ms came out near 62, about 16 uneven frames
-            // a second. 16 ms lands on two ticks: an even 32 a second.
-            int want = still ? 400 : battery ? 47 : 16;
-            if (tick.Interval != want) tick.Interval = want;
+            if (Visible) PassClicks();
         };
         Load_();
     }
@@ -206,6 +199,7 @@ public class PetForm : Form
 
     protected override void Dispose(bool disposing)
     {
+        framesOn = false;
         if (disposing)
         {
             if (canvas != null) canvas.Dispose();
@@ -232,6 +226,76 @@ public class PetForm : Form
     {
         base.OnVisibleChanged(e);
         tick.Enabled = Visible;
+        if (Visible && frames == null)
+        {
+            framesOn = true;
+            frames = new System.Threading.Thread(FrameLoop);
+            frames.IsBackground = true;
+            frames.Start();
+        }
+        else if (!Visible) { framesOn = false; frames = null; }
+    }
+
+    /* -------------------------------------------------------------- *
+     * Frames, one per screen refresh. A WinForms timer ticks in 15.6 ms
+     * steps and drifts, so motion drawn on it judders however fast it is
+     * set. DwmFlush returns as Windows finishes composing each refresh, so
+     * a frame drawn after it lands once per refresh, evenly: 60 a second on
+     * a 60 Hz screen, every other refresh on a faster one. Battery saver
+     * halves that. Windows' animations setting never lowers the frame rate,
+     * which only makes motion look broken; it calms the motion instead.
+     * -------------------------------------------------------------- */
+
+    [DllImport("dwmapi.dll")] static extern int DwmFlush();
+    volatile bool framesOn;
+    System.Threading.Thread frames;
+
+    [DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr h);
+    [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr h, IntPtr dc);
+    [DllImport("gdi32.dll")] static extern int GetDeviceCaps(IntPtr dc, int index);
+
+    // Refreshes to skip between frames, so a fast screen is not drawn for
+    // at its full rate: 60 Hz draws every refresh, 120 and 144 Hz every
+    // other one, an even 60 or 72 a second.
+    static int RefreshStep()
+    {
+        int hz = 60;
+        try { IntPtr dc = GetDC(IntPtr.Zero); hz = GetDeviceCaps(dc, 116 /* VREFRESH */); ReleaseDC(IntPtr.Zero, dc); } catch { }
+        if (hz < 30 || hz > 500) hz = 60;
+        return Math.Max(1, (int)Math.Round(hz / 60.0));
+    }
+
+    void FrameLoop()
+    {
+        int n = 0, drawn = 0, step = RefreshStep();
+        System.Diagnostics.Stopwatch since = System.Diagnostics.Stopwatch.StartNew();
+        bool reported = false;
+        while (framesOn)
+        {
+            // Once, ten seconds after it appears: the rate it actually drew at.
+            if (!reported && since.Elapsed.TotalSeconds >= 10)
+            {
+                reported = true;
+                LogNote("pet drew " + drawn + " frames in 10 s (" + (drawn / 10) + " a second)");
+            }
+            if (DwmFlush() != 0) System.Threading.Thread.Sleep(16);
+            // Battery saver: half as many frames, still evenly spaced.
+            if (++n % (battery ? step * 2 : step) != 0) continue;
+            try
+            {
+                if (!framesOn || IsDisposed) break;
+                // Drawn on the window's own thread, and waited for, so frames
+                // never queue up behind each other.
+                Invoke((Action)delegate { if (Visible) Render(); });
+                drawn++;
+            }
+            catch { break; }
+        }
+    }
+
+    static void LogNote(string line)
+    {
+        try { File.AppendAllText(Path.Combine(Path.GetTempPath(), "PromptAdvisor.log"), DateTime.Now.ToString("s") + "  " + line + Environment.NewLine); } catch { }
     }
 
     public void SetMode(string mode)
@@ -589,7 +653,8 @@ public class PetForm : Form
         double snack = mood == Mood.Resting || mood == Mood.Working ? (t % 13) / 13 : 0;
         float gulp = snack > 0.965 ? (float)Math.Sin((snack - 0.965) / 0.035 * Math.PI) : 0;
 
-        float bob = (float)Math.Sin(t * 1.05) * (mood == Mood.Resting || mood == Mood.Hidden ? 2f : 1.1f);
+        if (still) { spin *= 0.4f; wobble *= 0.4f; lift *= 0.4f; }
+        float bob = (float)Math.Sin(t * 1.05) * (mood == Mood.Resting || mood == Mood.Hidden ? 2f : 1.1f) * (still ? 0.3f : 1f);
         float breath = (float)Math.Sin(t * (deep || mood == Mood.Hidden ? 0.8 : 1.4)) * 0.022f;
         float turn = -16 + wobble + attendX * 9;
         g.TranslateTransform(0, bob - lift);
