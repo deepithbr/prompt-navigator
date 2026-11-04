@@ -246,9 +246,12 @@ public class TaskBoard
                 IntPtr w = WindowTitled("brave", it.Title);
                 if (w != IntPtr.Zero) { Front(w); return; }
                 string brave = BravePath();
-                if (url.StartsWith("https://") && brave != null) { Process.Start(brave, "\"" + url + "\""); return; }
+                string safe = ChatAddress(url);
+                // "--" ends Brave's switches, so nothing in the address can be
+                // read as one; the address itself is a checked, encoded URI.
+                if (safe != null && brave != null) { Process.Start(brave, "-- \"" + safe + "\""); return; }
             }
-            else if (url.StartsWith("codex://"))
+            else if (CodexLink.IsMatch(url))
             {
                 Process.Start(url);
                 return;
@@ -271,6 +274,23 @@ public class TaskBoard
             else if (proc == "claude") Process.Start("claude://claude.ai/new");
         }
         catch { }
+    }
+
+    // A task's address reaches the board from outside it, so before it goes
+    // anywhere near a command line it must be an https address on one of the
+    // two chat sites, in the encoded form Uri gives it, with no quotes or
+    // spaces left in it.
+    static readonly string[] ChatHosts = { "claude.ai", "chatgpt.com", "chat.openai.com" };
+    static readonly Regex CodexLink = new Regex(@"^codex://threads/[0-9a-fA-F-]{36}$");
+
+    static string ChatAddress(string url)
+    {
+        Uri u;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out u) || u.Scheme != Uri.UriSchemeHttps) return null;
+        if (Array.IndexOf(ChatHosts, u.Host.ToLowerInvariant()) < 0 || !u.IsDefaultPort) return null;
+        string s = u.AbsoluteUri;
+        foreach (char c in s) if (c == '"' || char.IsWhiteSpace(c) || char.IsControl(c)) return null;
+        return s;
     }
 
     static void Front(IntPtr w)
