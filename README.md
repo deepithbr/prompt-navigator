@@ -105,6 +105,8 @@ Voidling, a small black hole, sits in the bottom-right corner of the screen, abo
 
 ![Voidling resting, noticing you, in deep rest, swallowing a mote, hidden, thinking, working, after a finish, and when a task needs you](docs/screenshots/pet-states.png)
 
+![Planets for one task, three with one hidden, one needing you, seven with +2, and a finished task's planet spiralling in before the ripple](docs/screenshots/pet-planets.png)
+
 | It shows | When |
 |---|---|
 | A dim amber disk, flowing slowly; dimmer still after a long quiet | Nothing is running |
@@ -112,7 +114,9 @@ Voidling, a small black hole, sits in the bottom-right corner of the screen, abo
 | Now and then a mote of gas falls in along the disk | Resting or working |
 | Faint and nearly still | A run is going in an app you cannot see, minimized or covered |
 | Hot white-gold, a bright knot of gas racing round the disk fast, the void a little tighter | The first seconds of a run |
-| Hot white-gold, with one bright knot of gas and its tail racing round the disk, and a count if more than one task runs | Any Claude or ChatGPT task is working |
+| Hot white-gold, with one bright knot of gas and its tail racing round the disk | Any Claude or ChatGPT task is working |
+| A small numbered planet on a slow orbit for each task, gold while it runs, faint for a hidden ChatGPT chat, crimson and pulsing while it waits on you. The number is its row in the task list. Past five planets, a small +2 counts the rest | Each task that is running or needs you |
+| A planet spirals into the void, heated white and stretched thin, the gas flares, and then the finish ripple rolls out | That planet's task finished. A task that ends any other way, closed or lost, just fades |
 | A blue-white flare that settles into cool blue and stillness, a ripple of light every few seconds until you look, and a green bubble naming the task | A task finished while you were in another app |
 | The gas cooled to a deep crimson, its light breathing slowly, and an orange bubble | A task needs your approval or answer |
 
