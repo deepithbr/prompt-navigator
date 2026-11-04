@@ -311,7 +311,8 @@ public class PetForm : Form
         else if (Visible) leaving = true;
     }
 
-    bool Busy() { return working > 0 || alerts.Count > 0 || flash != null; }
+    // Anything still going keeps the pet up, seen or not.
+    bool Busy() { return working > 0 || hiddenRuns > 0 || alerts.Count > 0 || flash != null; }
 
     // Motes and glow drift out past the creature, and a layered window
     // catches the mouse wherever it has drawn anything, so a faint mote over
@@ -398,7 +399,14 @@ public class PetForm : Form
             // A Claude Code turn you interrupted never sends its stop, so a
             // task silent for three hours no longer counts as running.
             if (it.State == "working" && (DateTime.Now - it.Updated).TotalHours < 3) working++;
-            if (it.State == "hidden" && (DateTime.Now - it.Updated).TotalHours < 3) hidden++;
+            // A Claude chat out of sight, behind the Code tab or minimized, is
+            // still working as far as you are concerned: claude.ai will say
+            // when it finishes. Only a run nothing can follow, like a ChatGPT
+            // chat in a minimized window, shows the faint hidden look.
+            if (it.State == "hidden" && (DateTime.Now - it.Updated).TotalHours < 3)
+            {
+                if (it.App == "claude") working++; else hidden++;
+            }
         }
         // Gone from the board, or started again, means you have been back to it.
         alerts.RemoveAll(delegate (TaskItem a)
@@ -463,7 +471,7 @@ public class PetForm : Form
             if (a.State == "needs") continue;
             int n;
             lookedAt.TryGetValue(a.Key, out n);
-            n = InFront(a) ? n + 1 : 0;
+            n = LookingAt(a) ? n + 1 : 0;
             if (n >= 4)
             {
                 dismissed.Add(Stamp(a));
@@ -472,6 +480,17 @@ public class PetForm : Form
             }
             else lookedAt[a.Key] = n;
         }
+    }
+
+    // Whether you can see the task an alert is about. A Claude chat lives in
+    // the same window as Claude Code, so the Claude app being in front is not
+    // enough: the chat must be showing, not the Code tab. Anything else
+    // counts as seen when its app is in front.
+    bool LookingAt(TaskItem it)
+    {
+        bool chat = it.App == "claude" && !(it.Source ?? "").StartsWith("Claude Code");
+        if (!chat) return InFront(it);
+        try { return board.ChatInView(); } catch { return false; }
     }
 
     static bool InFront(TaskItem it)
