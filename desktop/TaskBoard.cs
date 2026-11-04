@@ -41,6 +41,8 @@ public class TaskItem
 public class TaskBoard
 {
     public const int Port = 47823;
+    // Hook input carries a prompt and a little more; a report is never near this.
+    const int MaxBody = 1000000;
 
     readonly Dictionary<string, TaskItem> items = new Dictionary<string, TaskItem>();
     readonly object gate = new object();
@@ -104,6 +106,12 @@ public class TaskBoard
                 items[key] = it;
             }
             changed = it.State != state;
+            // A session or thread is one row, so a second request for your
+            // approval in it is not a change of state. It is still news when
+            // it asks about something else, or comes after a pause.
+            if (!changed && state == "needs"
+                && ((!string.IsNullOrEmpty(title) && title != it.Title) || (DateTime.Now - it.Updated).TotalSeconds > 10))
+                changed = true;
             // A Claude Code session is one row across all its turns, so each
             // new turn restarts the clock rather than counting from the first.
             if (changed && state == "working" && it.State != "hidden") it.Started = DateTime.Now;
@@ -143,7 +151,8 @@ public class TaskBoard
         {
             // A web tab that stopped reporting mid-task was closed or crashed.
             foreach (TaskItem it in items.Values)
-                if (it.State == "working" && it.Source.EndsWith("in Brave") && (DateTime.Now - it.Updated).TotalMinutes > 3)
+                if ((it.State == "working" && it.Source.EndsWith("in Brave") && (DateTime.Now - it.Updated).TotalMinutes > 3)
+                    || (it.State == "hidden" && (DateTime.Now - it.Updated).TotalHours > 3))
                     it.State = "lost";
             List<TaskItem> all = new List<TaskItem>(items.Values);
             all.Sort(delegate (TaskItem a, TaskItem b) { return b.Updated.CompareTo(a.Updated); });
@@ -261,11 +270,17 @@ public class TaskBoard
 
         string proc = ProcessFor(it.App);
         if (proc == null) return;
+        // A process can exit between being listed and being asked for its
+        // window; that must not take the companion down with it.
         foreach (Process p in Process.GetProcessesByName(proc))
         {
-            if (p.MainWindowHandle == IntPtr.Zero) continue;
-            Front(p.MainWindowHandle);
-            return;
+            try
+            {
+                if (p.MainWindowHandle == IntPtr.Zero) continue;
+                Front(p.MainWindowHandle);
+                return;
+            }
+            catch { }
         }
         // No window: closed to the tray. Each app's own link brings it back.
         try
@@ -309,6 +324,9 @@ public class TaskBoard
     static IntPtr WindowTitled(string proc, string title)
     {
         if (string.IsNullOrEmpty(title)) return IntPtr.Zero;
+        // A long title was cut short with an ellipsis; match on what is left.
+        title = title.TrimEnd('\u2026').TrimEnd();
+        if (title.Length < 4) return IntPtr.Zero;
         HashSet<uint> pids = new HashSet<uint>();
         foreach (Process p in Process.GetProcessesByName(proc)) pids.Add((uint)p.Id);
         IntPtr found = IntPtr.Zero;
@@ -400,6 +418,19 @@ public class TaskBoard
                     if (k == "host") host = v.ToLowerInvariant();
                     if (k == "origin") origin = v.ToLowerInvariant();
                 }
+                // Checked before any body is read: a request that is not ours,
+                // or larger than any real report, gets no memory at all.
+                bool localHost = host == "127.0.0.1:" + Port || host == "localhost:" + Port;
+                bool okOrigin = origin.Length == 0 || origin.StartsWith("chrome-extension://");
+                if (!localHost || !okOrigin) ours = false;
+                if (length < 0 || length > MaxBody || (method == "POST" && !ours))
+                {
+                    string refused = length > MaxBody ? "413 Payload Too Large" : "403 Forbidden";
+                    BoardLog(method + " " + path + " host=" + host + " origin=" + (origin.Length > 0 ? origin : "-") + " length=" + length + " -> " + refused);
+                    byte[] no = Encoding.ASCII.GetBytes("HTTP/1.1 " + refused + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    s.Write(no, 0, no.Length);
+                    return;
+                }
                 int bodyStart = headEnd + 4;
                 byte[] body = new byte[Math.Max(0, length)];
                 int have = Math.Min(length, got - bodyStart);
@@ -415,9 +446,7 @@ public class TaskBoard
                 // custom header. Such a request still names the site in Host
                 // and Origin, so only this machine's own names are accepted,
                 // and only the extension, or no browser at all, as the origin.
-                bool localHost = host == "127.0.0.1:" + Port || host == "localhost:" + Port;
-                bool okOrigin = origin.Length == 0 || origin.StartsWith("chrome-extension://");
-                if (!localHost || !okOrigin) ours = false;
+                // (Checked above, before the body.)
                 string status = "204 No Content", answer = "";
                 if (method == "GET" && path == "/ping") status = localHost ? "200 OK" : "403 Forbidden";
                 else if (method == "GET" && path == "/claude-state" && ours) { status = "200 OK"; answer = ClaudeState(); }
@@ -508,6 +537,8 @@ public class TaskBoard
             if (what == "needs" && Str(d, "message").Length > 0) title = title + " \u00B7 " + Short(Str(d, "message"), 50);
             Upsert("cc:" + sid, source, title, state, "", "claude", false);
             if (what != "start") claudeCodeSaidAt = DateTime.Now;
+            string transcript = Str(d, "transcript_path");
+            if (transcript.Length > 0) lock (gate) transcripts["cc:" + sid] = new Transcript(transcript);
             return;
         }
 
@@ -553,7 +584,57 @@ public class TaskBoard
             // know about is not listed a second time from the app's screen.
             try { ScanCodex(); } catch (Exception e) { Log("codex watch: " + e.Message); }
             try { if (Due("ChatGPT")) WatchOne("ChatGPT", "ChatGPT app"); } catch { }
+            try { CheckTranscripts(); } catch (Exception e) { Log("transcripts: " + e.Message); }
             Thread.Sleep(2000);
+        }
+    }
+
+    /* -------------------------------------------------------------- *
+     * Claude Code turns stopped with Esc. Claude Code sends no hook when
+     * you interrupt a turn, so its row would stay "working" until your
+     * next prompt. A turn that is working keeps writing to its transcript,
+     * so a transcript that has not grown in 20 minutes means the turn was
+     * stopped, or the session closed.
+     * -------------------------------------------------------------- */
+
+    class Transcript
+    {
+        public readonly string Path;
+        public long Length = -1;
+        public DateTime GrewAt = DateTime.UtcNow;
+        public Transcript(string path) { Path = path; }
+    }
+
+    readonly Dictionary<string, Transcript> transcripts = new Dictionary<string, Transcript>();
+    DateTime transcriptsCheckedAt = DateTime.MinValue;
+
+    void CheckTranscripts()
+    {
+        if ((DateTime.UtcNow - transcriptsCheckedAt).TotalSeconds < 30) return;
+        transcriptsCheckedAt = DateTime.UtcNow;
+        List<KeyValuePair<string, Transcript>> open = new List<KeyValuePair<string, Transcript>>();
+        lock (gate)
+            foreach (KeyValuePair<string, Transcript> t in transcripts)
+            {
+                TaskItem it;
+                if (items.TryGetValue(t.Key, out it) && it.State == "working") open.Add(t);
+            }
+        foreach (KeyValuePair<string, Transcript> t in open)
+        {
+            long len;
+            try
+            {
+                // Opened, not just listed: Windows is slow to update a size
+                // it lists for a file another program holds open.
+                using (FileStream s = new FileStream(t.Value.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                    len = s.Length;
+            }
+            catch { len = -2; }
+            if (len != t.Value.Length) { t.Value.Length = len; t.Value.GrewAt = DateTime.UtcNow; continue; }
+            if ((DateTime.UtcNow - t.Value.GrewAt).TotalMinutes < 20) continue;
+            TaskItem row;
+            lock (gate) items.TryGetValue(t.Key, out row);
+            if (row != null && row.State == "working") Upsert(t.Key, null, null, "lost", "", "claude", true);
         }
     }
 
@@ -574,7 +655,26 @@ public class TaskBoard
         Process p = null;
         foreach (Process x in Process.GetProcessesByName(proc))
             if (x.MainWindowHandle != IntPtr.Zero) { p = x; break; }
-        if (p == null) return;
+        if (p == null)
+        {
+            // The window went away mid-run: closed, or to the tray. A Claude
+            // run can still finish on claude.ai, which the extension sees, so
+            // it waits as hidden. A ChatGPT chat leaves no trace, so it ends.
+            AppWatch gone;
+            if (watches.TryGetValue(proc, out gone) && gone.Running && gone.Key != null)
+            {
+                if (proc == "claude")
+                {
+                    if (!gone.Blind) { gone.Blind = true; Upsert(gone.Key, label, null, "hidden", "", "claude", true); }
+                }
+                else
+                {
+                    gone.Running = false; gone.Blind = false;
+                    Upsert(gone.Key, label, null, "lost", "", "chatgpt", true);
+                }
+            }
+            return;
+        }
         AutomationElement win = AutomationElement.FromHandle(p.MainWindowHandle);
         string app = proc == "claude" ? "claude" : "chatgpt";
 

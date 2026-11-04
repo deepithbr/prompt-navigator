@@ -6,7 +6,13 @@
 #
 # It runs with no window, so each start and anything that stops it is written
 # to %TEMP%\PromptAdvisor.log. A crash restarts it after ten seconds, up to
-# five times. Choosing Exit from the tray stops it for good.
+# five times in a row. Choosing Exit from the tray stops it for good.
+#
+# A crash restarts it as a fresh process, not by running it again in this one.
+# The task board's listener and watcher threads would outlive a crash here and
+# keep the port, so a second board in the same process could never listen.
+
+param([int]$Attempt = 1)
 
 $dir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $log = Join-Path $env:TEMP 'PromptAdvisor.log'
@@ -26,15 +32,21 @@ try {
   exit 1
 }
 
-for ($attempt = 1; $attempt -le 5; $attempt++) {
-  Note "started (attempt $attempt)"
-  try {
-    # Returns when you choose Exit, or at once if another copy is running.
-    [AdvisorHost]::Run($dir)
-    Note 'stopped'
-    break
-  } catch {
-    Note "crashed: $($_.Exception.ToString())"
+Note "started (attempt $Attempt)"
+try {
+  # Returns when you choose Exit, or at once if another copy is running.
+  [AdvisorHost]::Run($dir)
+  Note 'stopped'
+} catch {
+  Note "crashed: $($_.Exception.ToString())"
+  if ($Attempt -lt 5) {
     Start-Sleep -Seconds 10
+    $self = Join-Path $dir 'PromptAdvisor.ps1'
+    Start-Process -FilePath (Join-Path $env:WINDIR 'System32\conhost.exe') -ArgumentList @(
+      '--headless', 'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+      '-File', "`"$self`"", '-Attempt', ($Attempt + 1))
+  } else {
+    Note 'crashed five times in a row; not restarting'
   }
+  exit 1
 }

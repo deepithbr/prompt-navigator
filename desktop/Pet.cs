@@ -73,6 +73,10 @@ public class PetForm : Form
     RectangleF closeBox = RectangleF.Empty;
     bool overClose;
     int lastWorking;
+    // Alerts put away by hand, as key@time, so a request that is still open
+    // on the board does not come straight back; a newer one does.
+    readonly HashSet<string> dismissed = new HashSet<string>();
+    int ticks, faults;
 
     public PetForm(TaskBoard board)
     {
@@ -89,12 +93,12 @@ public class PetForm : Form
 
         ContextMenu menu = new ContextMenu();
         menu.MenuItems.Add("Tasks", delegate { board.Show(); });
-        menu.MenuItems.Add("Dismiss", delegate { alerts.Clear(); flash = null; });
+        menu.MenuItems.Add("Dismiss all", delegate { DismissAll(); });
         MenuItem chime = new MenuItem("Sound");
         chime.Click += delegate { sound = !sound; Save(); };
         menu.MenuItems.Add(chime);
         // Away until the next task starts or finishes, whatever the mode.
-        menu.MenuItems.Add("Hide until the next task", delegate { alerts.Clear(); flash = null; snoozed = true; Hide(); });
+        menu.MenuItems.Add("Hide until the next task", delegate { DismissAll(); snoozed = true; Hide(); });
         menu.Popup += delegate { chime.Checked = sound; };
         ContextMenu = menu;
 
@@ -117,7 +121,7 @@ public class PetForm : Form
             if (e.Button != MouseButtons.Left || !pressed) return;
             pressed = false;
             if (dragging) { dragging = false; Rescale(); Save(); }
-            else if (closeBox.Contains(e.X / scale, e.Y / scale)) { alerts.Clear(); flash = null; overClose = false; }
+            else if (closeBox.Contains(e.X / scale, e.Y / scale)) { DismissShown(); overClose = false; }
             else Clicked();
         };
         MouseLeave += delegate { overClose = false; };
@@ -125,9 +129,23 @@ public class PetForm : Form
         board.Changed += delegate { if (IsHandleCreated) BeginInvoke((Action)Sync); };
         board.Alerted += delegate (TaskItem it) { if (IsHandleCreated) BeginInvoke((Action)delegate { Alert(it); }); };
 
+        // Held back over a full-screen app: look every 2 seconds for the
+        // screen to be yours again, then show what waited.
+        holdCheck.Interval = 2000;
+        holdCheck.Tick += delegate
+        {
+            if (ScreenBusy()) return;
+            holdCheck.Enabled = false;
+            held = false;
+            Sync();
+        };
+
         tick.Interval = 50;
         tick.Tick += delegate
         {
+            // The board's state also changes with time alone: a run silent
+            // for hours stops counting. Read it again about once a second.
+            if (++ticks % 10 == 0) Sync();
             Fade();
             if (Visible) Render();
             // Twenty frames a second only while something moves fast: a
@@ -212,9 +230,26 @@ public class PetForm : Form
     void Present()
     {
         if (Mode == "off") return;
+        // Over a full-screen app or a presentation, hold everything back;
+        // it shows once the screen is yours again.
+        if (ScreenBusy()) { held = true; holdCheck.Enabled = true; if (Visible) Hide(); return; }
         leaving = false;
         if (!Visible) { fade = 0; Show(); }
+        if (!tick.Enabled) { faults = 0; tick.Enabled = true; }
         Render();
+    }
+
+    // QUNS_BUSY, QUNS_RUNNING_D3D_FULL_SCREEN, QUNS_PRESENTATION_MODE: a
+    // full-screen app, a game or video, or presentation settings switched on.
+    [DllImport("shell32.dll")] static extern int SHQueryUserNotificationState(out int state);
+    readonly Timer holdCheck = new Timer();
+    bool held;
+
+    static bool ScreenBusy()
+    {
+        int st;
+        try { if (SHQueryUserNotificationState(out st) != 0) return false; } catch { return false; }
+        return st == 2 || st == 3 || st == 4;
     }
 
     // Each tick: in "auto", start leaving once idle for 30 seconds; then
@@ -254,6 +289,12 @@ public class PetForm : Form
             TaskItem now;
             return !byKey.TryGetValue(a.Key, out now) || now.State == "working";
         });
+        // A request that still waits on you is shown, even if its alert was
+        // lost to a restart, unless you put it away yourself.
+        foreach (TaskItem it in all)
+            if (it.State == "needs" && (DateTime.Now - it.Updated).TotalHours < 3
+                && !dismissed.Contains(Stamp(it)) && !alerts.Exists(delegate (TaskItem a) { return a.Key == it.Key; }))
+                alerts.Add(it);
         // Hidden by hand, it stays away until a task starts that was not
         // already running then.
         if (working > lastWorking) snoozed = false;
@@ -266,7 +307,10 @@ public class PetForm : Form
         Sync();
         double now = clock.Elapsed.TotalSeconds;
         alertAt = now;
-        if (InFront(it))
+        // The board already decided this is news. It cannot tell for Claude
+        // Code, whose hooks do not say whether you are looking, so a finish
+        // there while the Claude app is in front only flashes.
+        if ((it.Source ?? "").StartsWith("Claude Code") && InFront(it))
         {
             flash = it;
             flashUntil = now + 4;
@@ -279,7 +323,7 @@ public class PetForm : Form
         lastBusy = now;
         snoozed = false;
         Present();
-        if (sound && Mode != "off")
+        if (sound && Mode != "off" && !held)
         {
             if (it.State == "needs") SystemSounds.Exclamation.Play();
             else SystemSounds.Asterisk.Play();
@@ -299,13 +343,32 @@ public class PetForm : Form
         catch { return false; }
     }
 
+    // A click opens the task in the bubble and puts away only that one;
+    // others still waiting take its place.
     void Clicked()
     {
         if (alerts.Count == 0) { board.Show(); return; }
         TaskItem last = alerts[alerts.Count - 1];
+        DismissShown();
+        board.Open(last);
+    }
+
+    static string Stamp(TaskItem it) { return it.Key + "@" + it.Updated.Ticks; }
+
+    void DismissShown()
+    {
+        flash = null;
+        if (alerts.Count == 0) return;
+        TaskItem last = alerts[alerts.Count - 1];
+        dismissed.Add(Stamp(last));
+        alerts.RemoveAt(alerts.Count - 1);
+    }
+
+    void DismissAll()
+    {
+        foreach (TaskItem a in alerts) dismissed.Add(Stamp(a));
         alerts.Clear();
         flash = null;
-        board.Open(last);
     }
 
     /* -------------------------------------------------------------- *
@@ -336,13 +399,21 @@ public class PetForm : Form
                 Draw(g, clock.Elapsed.TotalSeconds);
             }
             canvas.Push(this, (byte)(255 * fade));
+            faults = 0;
         }
         catch (Exception e)
         {
-            // Never let a drawing fault take the board down with it.
-            tick.Enabled = false;
-            try { File.AppendAllText(Path.Combine(Path.GetTempPath(), "PromptAdvisor.log"), DateTime.Now.ToString("s") + "  pet stopped drawing: " + e.Message + Environment.NewLine); } catch { }
+            // Never let a drawing fault take the board down with it. One bad
+            // frame is skipped. Only a long run of them stops the drawing, and
+            // the next time the pet is shown it tries again.
+            if (++faults == 1 || faults % 100 == 0) LogFault(e);
+            if (faults >= 200) tick.Enabled = false;
         }
+    }
+
+    void LogFault(Exception e)
+    {
+        try { File.AppendAllText(Path.Combine(Path.GetTempPath(), "PromptAdvisor.log"), DateTime.Now.ToString("s") + "  pet could not draw (" + faults + " in a row): " + e.Message + Environment.NewLine); } catch { }
     }
 
     void Draw(Graphics g, double t)
