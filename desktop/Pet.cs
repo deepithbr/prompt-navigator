@@ -67,6 +67,12 @@ public class PetForm : Form
     const double IdleHide = 30;
     double lastBusy = -1000;
     float fade = 1f;
+    // How much of the pet shows while a task quietly runs: full at the
+    // start, about a quarter once the run settles, full again for a
+    // finish, a request or the pointer coming near.
+    const float QuietAlpha = 0.25f;
+    float presence = 1f;
+    Mood drawn = Mood.Resting;
     bool leaving, snoozed;
     Canvas canvas;
 
@@ -566,7 +572,9 @@ public class PetForm : Form
                 UpdateGaze(m.X / scale, m.Y / scale, clock.Elapsed.TotalSeconds);
                 Draw(g, clock.Elapsed.TotalSeconds);
             }
-            canvas.Push(this, (byte)(255 * fade));
+            float want = Quiet(clock.Elapsed.TotalSeconds);
+            presence += (want - presence) * (want > presence ? 0.12f : 0.04f);
+            canvas.Push(this, (byte)(255 * fade * presence));
             faults = 0;
         }
         catch (Exception e)
@@ -609,6 +617,7 @@ public class PetForm : Form
         bubbleBox = RectangleF.Empty;
         TaskItem shown;
         Mood mood = PickMood(t, out shown);
+        drawn = mood;
         Mood said = shown == null ? mood : shown.State == "needs" ? Mood.Needs : Mood.Done;
 
         float cx = W - 8 - Span / 2f, cy = H - 8 - Span / 2f;
@@ -916,13 +925,31 @@ public class PetForm : Form
         }
     }
 
+    // The opacity the pet should have now. A run you are not waiting on
+    // fades with its glow, from full at six seconds to a quarter by about
+    // twenty, so it is just there. Anything that wants you brings it back.
+    float Quiet(double t)
+    {
+        if (alerts.Count > 0 || flash != null) return 1f;
+        double k;
+        if (drawn == Mood.Working) k = SettleK(t - runStart);
+        else if (drawn == Mood.Hidden) k = 1;
+        else return 1f;
+        float quiet = 1f - (1f - QuietAlpha) * (float)k;
+        return quiet + (1f - quiet) * attend;
+    }
+
+    static double SettleK(double since)
+    {
+        double k = Math.Max(0, Math.Min(1, (since - 6) / 14));
+        return k * k * (3 - 2 * k);
+    }
+
     // The glow of a run, from its start: full for six seconds, then easing
     // down to a calm level by about twenty.
     static float Settle(double since)
     {
-        double k = Math.Max(0, Math.Min(1, (since - 6) / 14));
-        k = k * k * (3 - 2 * k);
-        return (float)(1.08 - 0.46 * k);
+        return (float)(1.08 - 0.46 * SettleK(since));
     }
 
     static int Clamp(double v) { return v < 0 ? 0 : v > 255 ? 255 : (int)v; }
