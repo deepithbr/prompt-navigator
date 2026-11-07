@@ -77,6 +77,8 @@ public class PetForm : Form
     bool overClose;
     int lastWorking, hiddenRuns;
     double workingSince = -100;
+    // When the latest task started, for the bright start of each run.
+    double runStart = -100;
     // Battery saver on: half the motes and ten frames a second.
     bool battery;
     // Windows' "Animation effects" off: slower, gentler motion, never fewer frames.
@@ -422,6 +424,7 @@ public class PetForm : Form
         hiddenRuns = hidden;
         Orbit(all, byKey, clock.Elapsed.TotalSeconds);
         if (working > 0 && was == 0) workingSince = clock.Elapsed.TotalSeconds;
+        if (working > was) runStart = clock.Elapsed.TotalSeconds;
         // Hidden by hand, it stays away until a task starts that was not
         // already running then.
         if (working > lastWorking) snoozed = false;
@@ -800,9 +803,13 @@ public class PetForm : Form
             case Mood.Hidden:
                 bright = 0.32f; flow = 0.15f; hot = Gold2; mid = Amber; outer = Blend(Amber, Void, 0.4f); break;
             case Mood.Thinking:
-                bright = 0.85f; flow = 1.6f; core = 13.5f; hot = HotWhite; mid = Gold2; outer = Amber; break;
+                bright = 1.1f; flow = 1.6f; core = 13.5f; hot = HotWhite; mid = Gold2; outer = Amber; break;
             case Mood.Working:
-                bright = 0.95f + 0.05f * (float)Math.Sin(t * 2); flow = 1f; hot = HotWhite; mid = Gold2; outer = Amber; break;
+                // A run starts at full glow and settles, over about twenty
+                // seconds, to a calmer one while it works. The gas keeps its
+                // pace and the hot spot keeps racing, so it still reads as
+                // working. A new task starting lights it up again.
+                bright = Settle(t - runStart) + 0.04f * (float)Math.Sin(t * 2); flow = 1f; hot = HotWhite; mid = Gold2; outer = Amber; break;
             case Mood.Done:
                 // Finished: the gas turns cool blue-white and all but stops,
                 // and stays that way until you look. Still and blue means
@@ -812,10 +819,11 @@ public class PetForm : Form
                 {
                     // The flare: a rush of light that settles into stillness.
                     float k = (float)Math.Min(1, since / 3);
-                    bright = 1.15f - 0.35f * k; flow = 1.2f - 1.08f * k;
+                    bright = 1.2f - 0.15f * k; flow = 1.2f - 1.08f * k;
                     if (since < 1.4) lift = 5 * (float)Math.Sin(since / 1.4 * Math.PI);
                 }
-                else { bright = 0.78f + 0.06f * (float)Math.Sin(t * 1.1); flow = 0.12f; }
+                // And it keeps that full glow until you look.
+                else { bright = 1.05f + 0.06f * (float)Math.Sin(t * 1.1); flow = 0.12f; }
                 break;
             case Mood.Needs:
                 // The gas cools to crimson and its light breathes slowly.
@@ -906,6 +914,15 @@ public class PetForm : Form
             using (SolidBrush b = new SolidBrush(Color.FromArgb(Clamp(230 * (1 - 0.7 * k)), HotWhite)))
                 g.FillEllipse(b, (float)Math.Cos(a) * r - 1.4f, (float)Math.Sin(a) * r * (ry / rx) * 3 - 1.4f, 2.8f, 2.8f);
         }
+    }
+
+    // The glow of a run, from its start: full for six seconds, then easing
+    // down to a calm level by about twenty.
+    static float Settle(double since)
+    {
+        double k = Math.Max(0, Math.Min(1, (since - 6) / 14));
+        k = k * k * (3 - 2 * k);
+        return (float)(1.08 - 0.46 * k);
     }
 
     static int Clamp(double v) { return v < 0 ? 0 : v > 255 ? 255 : (int)v; }

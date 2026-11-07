@@ -366,15 +366,26 @@ public class TaskBoard
 
     void Listen()
     {
-        try
+        // A copy that is still closing, after a restart or a crash, can hold
+        // the port for a few seconds. Keep trying for fifteen before giving up.
+        for (int tries = 1; ; tries++)
         {
-            listener = new TcpListener(IPAddress.Loopback, Port);
-            listener.Start();
-        }
-        catch (Exception e)
-        {
-            Log("board could not listen on 127.0.0.1:" + Port + ": " + e.Message);
-            return;
+            try
+            {
+                listener = new TcpListener(IPAddress.Loopback, Port);
+                listener.Start();
+                break;
+            }
+            catch (Exception e)
+            {
+                if (!running) return;
+                if (tries >= 15)
+                {
+                    Log("board could not listen on 127.0.0.1:" + Port + ": " + e.Message);
+                    return;
+                }
+                Thread.Sleep(1000);
+            }
         }
         while (running)
         {
