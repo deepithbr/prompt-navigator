@@ -107,6 +107,8 @@ Voidling, a small black hole, sits in the bottom-right corner of the screen, abo
 
 ![Planets for one task, three with one hidden, one needing you, seven with +2, and a finished task's planet spiralling in before the ripple](docs/screenshots/pet-planets.png)
 
+![A run from its bright start to its calm middle, the finish flare, the full blue glow held until you look, and rest](docs/screenshots/pet-glow.png)
+
 | It shows | When |
 |---|---|
 | A dim amber disk, flowing slowly; dimmer still after a long quiet | Nothing is running |
@@ -114,10 +116,10 @@ Voidling, a small black hole, sits in the bottom-right corner of the screen, abo
 | Now and then a mote of gas falls in along the disk | Resting or working |
 | Faint and nearly still | A run is going in an app you cannot see, minimized or covered |
 | Hot white-gold, a bright knot of gas racing round the disk fast, the void a little tighter | The first seconds of a run |
-| Hot white-gold, with one bright knot of gas and its tail racing round the disk | Any Claude or ChatGPT task is working |
+| Hot white-gold at full glow, with one bright knot of gas and its tail racing round the disk. After six seconds the glow eases down, over about fourteen more, to a calmer gold, and the knot keeps racing. A new task lights it up again | Any Claude or ChatGPT task is working |
 | A small numbered planet on a slow orbit for each task, gold while it runs, faint for a hidden ChatGPT chat, crimson and pulsing while it waits on you. The number is its row in the task list. Past five planets, a small +2 counts the rest | Each task that is running or needs you |
 | A planet spirals into the void, heated white and stretched thin, the gas flares, and then the finish ripple rolls out | That planet's task finished. A task that ends any other way, closed or lost, just fades |
-| A blue-white flare that settles into cool blue and stillness, a ripple of light every few seconds until you look, and a green bubble naming the task | A task finished while you were in another app |
+| A blue-white flare that settles into a still, full blue glow, a ripple of light every few seconds until you look, and a green bubble naming the task | A task finished while you were in another app |
 | The gas cooled to a deep crimson, its light breathing slowly, and an orange bubble | A task needs your approval or answer |
 
 It draws one frame per screen refresh, timed to Windows' own screen updates: 60 a second on a 60 Hz screen, 60 or 72 on a faster one, half that on battery saver. Every movement is continuous, with nothing that jumps or flickers. With Windows' Animation effects off it moves more gently, at the same frame rate. The bubble stays until you click Voidling, which opens that task's conversation. Clicking it with no bubble opens the task list. A Claude Code task that finishes while the Claude app is in front gets a four-second flash and no sound, so a session in front of you does not nag. Drag it anywhere; it keeps the spot. The cross at the bubble's top right puts that one alert away without opening anything. Only Voidling and its bubble take clicks; the faint motes around it let clicks through to whatever is below. It holds back over full-screen apps and presentations, draws half its motes on battery saver, and all but stops moving when Windows' **Show animations** is off. Right-click for **Tasks**, **Dismiss all**, **Sound** and **Hide until the next task**.
