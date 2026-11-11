@@ -1309,6 +1309,18 @@ public class PetForm : Form
     // menu can be reached. With the pet set to Always show, so is it.
     const double TrayIdle = 30, TrayWake = 60;
     double trayBusyAt = -1000, trayWakeAt = -1000;
+    double hoverSeenAt = -1;
+    bool quietWake;
+
+    // With the finishes put away and nothing running or waiting on you,
+    // the icon and button leave now instead of lingering.
+    void Settle()
+    {
+        if (Busy()) return;
+        trayBusyAt = -1000;
+        trayWakeAt = -1000;
+        UpdateTray();
+    }
 
     public void AttachTray(NotifyIcon tray)
     {
@@ -1316,9 +1328,21 @@ public class PetForm : Form
         trayBase = tray.Text;
         trayStatic = tray.Icon;
         trayWakeAt = clock.Elapsed.TotalSeconds;
-        board.Shown += delegate { trayWakeAt = clock.Elapsed.TotalSeconds; UpdateTray(); };
+        board.Shown += delegate
+        {
+            // A second launch brings the button back for a minute; opening
+            // it from the button itself does not.
+            if (quietWake) quietWake = false; else trayWakeAt = clock.Elapsed.TotalSeconds;
+            UpdateTray();
+        };
         button = new TaskbarButton();
-        button.Clicked += delegate { TrayOpened(); board.Show(); };
+        // Opening the list from the button is looking: finishes are put away
+        // and, with nothing else going on, the button leaves at once.
+        button.Clicked += delegate { quietWake = true; board.Show(); TrayOpened(); Settle(); };
+        // Resting on it shows the card; two seconds later the finishes it
+        // named count as seen.
+        button.Hovered += delegate { if (alerts.Exists(delegate (TaskItem a) { return a.State != "needs"; })) hoverSeenAt = clock.Elapsed.TotalSeconds + 2; };
+        button.Card = DrawCard;
         trayTick.Interval = 100;
         trayTick.Tick += delegate
         {
@@ -1348,6 +1372,7 @@ public class PetForm : Form
     {
         if (trayIcon == null) return;
         double t = clock.Elapsed.TotalSeconds;
+        if (hoverSeenAt > 0 && t >= hoverSeenAt) { hoverSeenAt = -1; TrayOpened(); Settle(); return; }
         if (Busy()) trayBusyAt = t;
         bool wanted = Mode == "always" || t - trayBusyAt < TrayIdle || t - trayWakeAt < TrayWake;
         TaskItem shown;
@@ -1401,7 +1426,8 @@ public class PetForm : Form
     // finishes or needs you; a click opens the task list.
     TaskbarButton button;
     public bool ButtonOn = true;
-    string buttonGlyph = "", buttonBadge = "";
+    string buttonGlyph = "", buttonBadge = "", cardSays = "";
+    volatile string[][] cardRows = new string[0][];
 
     public void SetButton(bool on) { ButtonOn = on; Save(); UpdateTray(); }
 
@@ -1424,7 +1450,7 @@ public class PetForm : Form
             }
             else if (done.Count > 0) label = "Done · " + done[done.Count - 1].Title + (done.Count > 1 ? " +" + (done.Count - 1) : "");
             else label = "Quiet · Claude tasks";
-            if (label.Length > 120) label = label.Substring(0, 120);
+            if (label != cardSays) { cardSays = label; button.CardChanged(); }
 
             bool moving = mood == Mood.Working || mood == Mood.Thinking || mood == Mood.Needs;
             int size = Math.Max(32, SystemInformation.IconSize.Width);
@@ -1448,7 +1474,7 @@ public class PetForm : Form
             }
             using (glyph)
             using (badge)
-                button.Set(label, alerts.Count > 0, glyph, badgeChanged, badge, badgeText);
+                button.Set("", alerts.Count > 0, glyph, badgeChanged, badge, badgeText);
         }
         catch (Exception e) { LogNote("taskbar button: " + e.Message); }
     }
@@ -1473,6 +1499,48 @@ public class PetForm : Form
         }
         return b;
     }
+
+    // The hover card: a short list of what is going on, each line led by a
+    // dot in its colour. Needs you first, then running, then finished.
+    Bitmap DrawCard(int maxW, int maxH)
+    {
+        List<string[]> rows = new List<string[]>(cardRows);
+        foreach (TaskItem a in alerts)
+            if (a.State != "needs") rows.Add(new[] { "done", a.Title ?? a.Source ?? "" });
+        rows.Sort(delegate (string[] x, string[] y) { return Rank(x[0]).CompareTo(Rank(y[0])); });
+        if (rows.Count == 0) rows.Add(new[] { "quiet", "Nothing running" });
+
+        float k = Math.Max(1f, scale);
+        int lineH = (int)(22 * k), pad = (int)(10 * k);
+        int shown = Math.Min(rows.Count, Math.Max(1, (maxH - 2 * pad) / lineH));
+        int w = Math.Min(maxW, (int)(260 * k)), h = Math.Min(maxH, 2 * pad + shown * lineH);
+        Bitmap b = new Bitmap(w, h, PixelFormat.Format32bppArgb);
+        using (Graphics g = Graphics.FromImage(b))
+        using (Font f = new Font("Segoe UI", 12.5f * k, GraphicsUnit.Pixel))
+        using (SolidBrush ink = new SolidBrush(Paper))
+        {
+            g.Clear(Color.FromArgb(255, 32, 32, 36));
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+            StringFormat one = new StringFormat(StringFormatFlags.NoWrap);
+            one.Trimming = StringTrimming.EllipsisCharacter;
+            one.LineAlignment = StringAlignment.Center;
+            for (int i = 0; i < shown; i++)
+            {
+                string[] r = rows[i];
+                bool last = i == shown - 1 && rows.Count > shown;
+                string text = last ? "+" + (rows.Count - shown + 1) + " more" : r[1];
+                Color dot = r[0] == "needs" ? Crimson : r[0] == "done" ? BlueWhite : r[0] == "run" ? Gold2 : Dim;
+                float y = pad + i * lineH;
+                float d = 8 * k;
+                using (SolidBrush db = new SolidBrush(dot)) g.FillEllipse(db, pad, y + (lineH - d) / 2, d, d);
+                g.DrawString(text, f, ink, new RectangleF(pad + d + 8 * k, y, w - pad * 2 - d - 8 * k, lineH), one);
+            }
+        }
+        return b;
+    }
+
+    static int Rank(string state) { return state == "needs" ? 0 : state == "run" ? 1 : state == "done" ? 2 : 3; }
 
     string TrayTip()
     {
@@ -1657,6 +1725,9 @@ public class PetForm : Form
             extraPlanets = Math.Max(0, live.Count - MaxPlanets);
             liveTasks = live.Count;
             TaskItem run = live.Find(delegate (TaskItem it) { return it.State != "needs"; });
+            List<string[]> rows = new List<string[]>();
+            foreach (TaskItem it in live) rows.Add(new[] { it.State == "needs" ? "needs" : "run", it.Title ?? it.Source ?? "" });
+            cardRows = rows.ToArray();
             runTitle = run == null ? "" : run.Title ?? "";
         }
     }
@@ -2014,10 +2085,22 @@ public class TaskbarButton : Form
 
     // A click on the button.
     public event Action Clicked;
+    // The pointer rests on the button and Windows asks for its preview.
+    public event Action Hovered;
+    // Draws the hover card at most this size; the pet supplies it.
+    public Func<int, int, Bitmap> Card;
+
+    [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int attr, ref int value, int size);
+    [DllImport("dwmapi.dll")] static extern int DwmSetIconicThumbnail(IntPtr h, IntPtr bitmap, int flags);
+    [DllImport("dwmapi.dll")] static extern int DwmSetIconicLivePreviewBitmap(IntPtr h, IntPtr bitmap, IntPtr offset, int flags);
+    [DllImport("dwmapi.dll")] static extern int DwmInvalidateIconicBitmaps(IntPtr h);
+    [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr h);
 
     public TaskbarButton()
     {
-        Text = "Claude tasks";
+        // No words on the button: the icon says it, and the hover card names
+        // the tasks.
+        Text = "";
         ShowInTaskbar = true;
         StartPosition = FormStartPosition.Manual;
         Location = new Point(-32000, -32000);
@@ -2027,6 +2110,24 @@ public class TaskbarButton : Form
 
     // Puts the button on the taskbar or takes it off, without ever
     // showing the window or taking the focus.
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        // Hovering shows a card this window draws, not a picture of the
+        // window, and there is no full-screen peek behind it.
+        int on = 1;
+        DwmSetWindowAttribute(Handle, 7, ref on, 4);    // DWMWA_FORCE_ICONIC_REPRESENTATION
+        DwmSetWindowAttribute(Handle, 10, ref on, 4);   // DWMWA_HAS_ICONIC_BITMAP
+        DwmSetWindowAttribute(Handle, 11, ref on, 4);   // DWMWA_DISALLOW_PEEK
+    }
+
+    // What the card would say has changed: Windows asks for it again on
+    // the next hover.
+    public void CardChanged()
+    {
+        try { DwmInvalidateIconicBitmaps(Handle); } catch { }
+    }
+
     public void Present(bool on)
     {
         IntPtr h = Handle;
@@ -2079,6 +2180,31 @@ public class TaskbarButton : Form
 
     protected override void WndProc(ref Message m)
     {
+        if (m.Msg == 0x0323)   // WM_DWMSENDICONICTHUMBNAIL: lParam holds the largest size
+        {
+            int w = (int)(((long)m.LParam >> 16) & 0xFFFF), h = (int)((long)m.LParam & 0xFFFF);
+            Func<int, int, Bitmap> card = Card;
+            if (card != null && w > 0 && h > 0)
+            {
+                try
+                {
+                    using (Bitmap b = card(w, h))
+                    {
+                        IntPtr hb = b.GetHbitmap(Color.FromArgb(0));
+                        DwmSetIconicThumbnail(Handle, hb, 0);
+                        DeleteObject(hb);
+                    }
+                }
+                catch { }
+            }
+            Action a = Hovered;
+            if (a != null) a();
+            return;
+        }
+        if (m.Msg == 0x0326)   // WM_DWMSENDICONICLIVEPREVIEWBITMAP: no peek, nothing to send
+        {
+            return;
+        }
         if (m.Msg == ButtonCreated)
         {
             ready = true;
