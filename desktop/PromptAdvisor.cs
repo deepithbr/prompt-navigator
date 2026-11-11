@@ -310,6 +310,11 @@ class AdvisorContext : ApplicationContext
             petAuto.Checked = mode == "auto"; petAlways.Checked = mode == "always"; petOff.Checked = mode == "off";
         };
         menu.MenuItems.Add(petItem);
+        // The button with the other apps on the taskbar, on or off.
+        MenuItem buttonItem = new MenuItem("Taskbar button");
+        buttonItem.Click += delegate { if (pet != null) pet.SetButton(!pet.ButtonOn); };
+        menu.MenuItems.Add(buttonItem);
+        menu.Popup += delegate { buttonItem.Checked = pet == null || pet.ButtonOn; };
         MenuItem pause = new MenuItem("Pause");
         pause.Click += delegate { paused = !paused; pause.Text = paused ? "Resume" : "Pause"; if (paused) HideHint(); };
         menu.MenuItems.Add(pause);
