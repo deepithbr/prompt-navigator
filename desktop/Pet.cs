@@ -211,6 +211,8 @@ public class PetForm : Form
         framesOn = false;
         if (disposing)
         {
+            trayTick.Dispose();
+            if (trayHandle != IntPtr.Zero) { DestroyIcon(trayHandle); trayHandle = IntPtr.Zero; }
             if (canvas != null) canvas.Dispose();
             foreach (Bitmap b in glows.Values) b.Dispose();
             glows.Clear();
@@ -1275,6 +1277,169 @@ public class PetForm : Form
     }
 
     /* -------------------------------------------------------------- *
+     * The tray icon: Voidling in miniature, in the taskbar's corner
+     * -------------------------------------------------------------- */
+
+    // The icon by the clock shows what the pet would: dim amber at rest,
+    // gold with a bright spot circling while a task runs, steady blue once
+    // one finishes and waits for you, crimson and pulsing when one needs
+    // your approval. A small number counts the tasks when there is more
+    // than one. With the pet set to the taskbar icon only, this is all
+    // there is on screen, and a click opens the task list.
+    NotifyIcon trayIcon;
+    string trayBase = "Prompt Advisor";
+    IntPtr trayHandle = IntPtr.Zero;
+    Icon trayShown;
+    string trayKey = "";
+    volatile int liveTasks;
+    [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr h);
+
+    // The tray keeps its own timer, since the pet's stops while it is
+    // hidden. With the pet away it also reads the board once a second and
+    // puts away finishes you have gone and looked at, as the pet would.
+    readonly Timer trayTick = new Timer();
+    int trayTicks;
+
+    public void AttachTray(NotifyIcon tray)
+    {
+        trayIcon = tray;
+        trayBase = tray.Text;
+        trayTick.Interval = 100;
+        trayTick.Tick += delegate
+        {
+            if (!Visible && ++trayTicks % 10 == 0) { Sync(); ClearSeen(); }
+            UpdateTray();
+        };
+        trayTick.Enabled = true;
+        UpdateTray();
+    }
+
+    // Opening the list from the tray counts as looking: finishes are put
+    // away, and a request for your approval stays until it is answered.
+    public void TrayOpened()
+    {
+        foreach (TaskItem a in alerts) if (a.State != "needs") dismissed.Add(Stamp(a));
+        alerts.RemoveAll(delegate (TaskItem a) { return a.State != "needs"; });
+        flash = null;
+        UpdateTray();
+    }
+
+    void UpdateTray()
+    {
+        if (trayIcon == null) return;
+        double t = clock.Elapsed.TotalSeconds;
+        TaskItem shown;
+        Mood mood = PickMood(t, out shown);
+        bool moving = mood == Mood.Working || mood == Mood.Thinking || mood == Mood.Needs;
+        int size = Math.Max(16, SystemInformation.SmallIconSize.Width);
+        int count = liveTasks;
+        // Ten frames a second while something moves; otherwise only on a change.
+        string key = mood + "|" + count + "|" + size + "|" + (moving ? ((long)(t * 10)).ToString() : "");
+        if (key == trayKey) return;
+        trayKey = key;
+        try
+        {
+            IntPtr h;
+            using (Bitmap b = TrayGlyph(size, mood, t, count)) h = b.GetHicon();
+            Icon next = Icon.FromHandle(h);
+            trayIcon.Icon = next;
+            if (trayShown != null) trayShown.Dispose();
+            if (trayHandle != IntPtr.Zero) DestroyIcon(trayHandle);
+            trayShown = next;
+            trayHandle = h;
+            string tip = trayBase + TrayTip();
+            trayIcon.Text = tip.Length > 63 ? tip.Substring(0, 63) : tip;
+        }
+        catch (Exception e) { LogNote("tray icon could not draw: " + e.Message); }
+    }
+
+    string TrayTip()
+    {
+        int done = alerts.FindAll(delegate (TaskItem a) { return a.State != "needs"; }).Count;
+        int needs = alerts.Count - done;
+        int runs = working + hiddenRuns;
+        List<string> parts = new List<string>();
+        if (needs > 0) parts.Add(needs + " needs you");
+        if (runs > 0) parts.Add(runs + " running");
+        if (done > 0) parts.Add(done + " finished");
+        return parts.Count == 0 ? "" : "\n" + string.Join(", ", parts.ToArray());
+    }
+
+    // The icon itself, size pixels square: the disk nearly edge-on, its far
+    // half behind the void and its near half across it, a thin arch of
+    // light bent over the top, and the count in the corner.
+    static Bitmap TrayGlyph(int s, Mood mood, double t, int count)
+    {
+        Bitmap b = new Bitmap(s, s, PixelFormat.Format32bppArgb);
+        using (Graphics g = Graphics.FromImage(b))
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+            g.Clear(Color.Transparent);
+            Color ring;
+            float lit = 1;
+            switch (mood)
+            {
+                case Mood.Working:
+                case Mood.Thinking: ring = Gold2; break;
+                case Mood.Done: ring = BlueWhite; break;
+                case Mood.Needs: ring = Color.FromArgb(255, 84, 84); lit = 0.5f + 0.5f * (float)(0.5 + 0.5 * Math.Sin(t * 4)); break;
+                case Mood.Hidden: ring = Blend(Gold2, Void, 0.45f); lit = 0.8f; break;
+                default: ring = Color.FromArgb(214, 136, 80); lit = 0.75f; break;
+            }
+            bool badge = count > 1;
+            // With a number in the corner, the hole moves up and left a little.
+            float c = badge ? s * 0.44f : s * 0.5f;
+            float r = s * 0.22f, rx = s * 0.47f, ry = s * 0.14f;
+            float w = Math.Max(1.3f, s / 13f);
+            Color edge = Color.FromArgb(Clamp(255 * lit), ring);
+
+            g.TranslateTransform(c, c);
+            g.RotateTransform(-12);
+            // A dark edge under the strokes, so the light rings still read
+            // on a light taskbar.
+            using (Pen shade = new Pen(Color.FromArgb(110, Void), w + 1.6f))
+            {
+                g.DrawEllipse(shade, -rx, -ry, 2 * rx, 2 * ry);
+                g.DrawArc(shade, -r * 1.45f, -r * 1.45f, 2.9f * r, 2.9f * r, 200, 140);
+            }
+            using (Pen far = new Pen(Color.FromArgb(Clamp(170 * lit), ring), w))
+                g.DrawArc(far, -rx, -ry, 2 * rx, 2 * ry, 180, 180);
+            using (Pen arch = new Pen(Color.FromArgb(Clamp(150 * lit), ring), Math.Max(1f, w * 0.7f)))
+                g.DrawArc(arch, -r * 1.45f, -r * 1.45f, 2.9f * r, 2.9f * r, 200, 140);
+            using (SolidBrush v = new SolidBrush(Void)) g.FillEllipse(v, -r, -r, 2 * r, 2 * r);
+            using (Pen photon = new Pen(edge, Math.Max(1f, w * 0.8f))) g.DrawEllipse(photon, -r, -r, 2 * r, 2 * r);
+
+            // A bright spot circles the disk while a task runs, hidden as it
+            // passes behind the void.
+            double a = t * 2 * Math.PI / 2.4;
+            float hx = (float)Math.Cos(a) * rx * 0.86f, hy = (float)Math.Sin(a) * ry * 0.86f;
+            bool spot = mood == Mood.Working || mood == Mood.Thinking;
+            bool behind = Math.Sin(a) < 0 && Math.Abs(hx) < r;
+            using (Pen near = new Pen(edge, w * 1.25f))
+                g.DrawArc(near, -rx, -ry, 2 * rx, 2 * ry, 0, 180);
+            if (spot && !behind)
+            {
+                float d = Math.Max(2.4f, s / 7f);
+                using (SolidBrush hot = new SolidBrush(HotWhite)) g.FillEllipse(hot, hx - d / 2, hy - d / 2, d, d);
+            }
+            g.ResetTransform();
+
+            if (badge)
+            {
+                string n = count > 9 ? "9+" : count.ToString();
+                float br = s * 0.27f, bx = s - br, by = s - br;
+                using (SolidBrush bg = new SolidBrush(Color.FromArgb(240, 20, 18, 26))) g.FillEllipse(bg, bx - br, by - br, 2 * br, 2 * br);
+                using (Pen o = new Pen(edge, 1f)) g.DrawEllipse(o, bx - br + 0.5f, by - br + 0.5f, 2 * br - 1, 2 * br - 1);
+                using (Font f = new Font("Segoe UI", s * (n.Length > 1 ? 0.3f : 0.4f), FontStyle.Bold, GraphicsUnit.Pixel))
+                using (SolidBrush ink = new SolidBrush(Color.White))
+                    g.DrawString(n, f, ink, new RectangleF(bx - br - 2, by - br - 1, 2 * br + 4, 2 * br + 2), Centre);
+            }
+        }
+        return b;
+    }
+
+    /* -------------------------------------------------------------- *
      * Planets: one for each task that is running or waits on you
      * -------------------------------------------------------------- */
 
@@ -1369,6 +1534,7 @@ public class PetForm : Form
                 p.OffAt = now;
             }
             extraPlanets = Math.Max(0, live.Count - MaxPlanets);
+            liveTasks = live.Count;
         }
     }
 

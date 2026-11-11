@@ -279,7 +279,7 @@ class AdvisorContext : ApplicationContext
         MenuItem petItem = new MenuItem("Pet");
         MenuItem petAuto = new MenuItem("Show while a task runs");
         MenuItem petAlways = new MenuItem("Always show");
-        MenuItem petOff = new MenuItem("Never show");
+        MenuItem petOff = new MenuItem("Only the taskbar icon");
         petAuto.Click += delegate { if (pet != null) pet.SetMode("auto"); };
         petAlways.Click += delegate { if (pet != null) pet.SetMode("always"); };
         petOff.Click += delegate { if (pet != null) pet.SetMode("off"); };
@@ -301,11 +301,13 @@ class AdvisorContext : ApplicationContext
 
         // The task board: left-click the icon, or a notification, to open it.
         board = new TaskBoard(tray, hint);
-        tray.MouseClick += delegate (object s, MouseEventArgs e) { if (e.Button == MouseButtons.Left) board.Show(); };
-        tray.BalloonTipClicked += delegate { board.Show(); };
+        tray.MouseClick += delegate (object s, MouseEventArgs e) { if (e.Button == MouseButtons.Left) { board.Show(); if (pet != null) pet.TrayOpened(); } };
+        tray.BalloonTipClicked += delegate { board.Show(); if (pet != null) pet.TrayOpened(); };
 
-        // The desk pet in the corner of the screen, fed by the board.
+        // The desk pet in the corner of the screen, fed by the board, and
+        // its miniature, drawn as the tray icon.
         pet = new PetForm(board);
+        pet.AttachTray(tray);
         pet.Start();
 
         worker = new Thread(Loop);
