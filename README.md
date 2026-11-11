@@ -126,9 +126,13 @@ It draws one frame per screen refresh, timed to Windows' own screen updates: 60 
 
 By default Voidling only appears when there is something to show. It fades in when a task starts, finishes or needs you, and fades out once nothing has run and nothing has waited on you for 30 seconds. A finish you have not clicked keeps it on screen. The tray menu's **Pet** picks between **Show while a task runs**, **Always show** and **Only the taskbar icon**. Its position, sound and mode live in `%LOCALAPPDATA%\PromptAdvisor\pet.txt`.
 
-The tasks live in one button on the taskbar, with your other apps. Its icon is Voidling, redrawn ten times a second while something moves: gold with a bright spot circling while a task runs, steady blue once one finishes, crimson and pulsing when one needs your approval. A badge in its corner counts the tasks running or waiting on you, red when one needs you. Its label starts with the state, such as "2 running", "Done" or "Needs you", since Windows cuts labels short on a full taskbar. It flashes once when a task finishes or needs you, alongside the Windows notification. A click opens the task list and puts the finishes away, keeping any request for approval.
+The tasks live in one button on the taskbar, with your other apps. Its icon is Voidling, redrawn ten times a second while something moves: gold with a bright spot circling while a task runs, steady blue once one finishes, crimson and pulsing when one needs your approval. A badge in its corner counts the tasks running or waiting on you, red when one needs you. The button has no words on it. Rest the pointer on it and a small card names each task, needs you first, then running, then finished, each led by a dot in its colour. It flashes once when a task finishes or needs you, alongside the Windows notification.
 
-The button is there only while something is going on. It appears when a task starts and leaves 30 seconds after the last one ends with nothing waiting on you. Running `desktop\Start.cmd` again while the companion runs opens the task list and brings the button back for a minute.
+![The hover card: one task needing approval, two running and one finished](docs/screenshots/hover-card.png)
+
+A finish counts as seen two seconds after the card has shown it, or as soon as you click the button, which opens the task list. Either way, with nothing else running or waiting on you, the button leaves at once. A request for your approval stays until it is answered.
+
+Otherwise the button is there only while something is going on. It appears when a task starts and leaves 30 seconds after the last one ends with nothing waiting on you. Running `desktop\Start.cmd` again while the companion runs opens the task list and brings the button back for a minute.
 
 ![The taskbar button while two tasks run, its spot circling, then finished and flashing, finished, and needing you, beside a second button for comparison](docs/screenshots/taskbar-button.png)
 
