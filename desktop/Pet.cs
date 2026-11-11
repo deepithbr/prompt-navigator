@@ -212,6 +212,7 @@ public class PetForm : Form
         if (disposing)
         {
             trayTick.Dispose();
+            if (button != null) button.Dispose();
             if (trayHandle != IntPtr.Zero) { DestroyIcon(trayHandle); trayHandle = IntPtr.Zero; }
             if (canvas != null) canvas.Dispose();
             foreach (Bitmap b in glows.Values) b.Dispose();
@@ -1292,6 +1293,7 @@ public class PetForm : Form
     Icon trayShown;
     string trayKey = "";
     volatile int liveTasks;
+    volatile string runTitle = "";
     [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr h);
 
     // The tray keeps its own timer, since the pet's stops while it is
@@ -1314,6 +1316,8 @@ public class PetForm : Form
         trayBase = tray.Text;
         trayWakeAt = clock.Elapsed.TotalSeconds;
         board.Shown += delegate { trayWakeAt = clock.Elapsed.TotalSeconds; UpdateTray(); };
+        button = new TaskbarButton();
+        button.Clicked += delegate { TrayOpened(); board.Show(); };
         trayTick.Interval = 100;
         trayTick.Tick += delegate
         {
@@ -1341,9 +1345,10 @@ public class PetForm : Form
         if (Busy()) trayBusyAt = t;
         bool wanted = Mode == "always" || t - trayBusyAt < TrayIdle || t - trayWakeAt < TrayWake;
         if (trayIcon.Visible != wanted) trayIcon.Visible = wanted;
-        if (!wanted) return;
         TaskItem shown;
         Mood mood = PickMood(t, out shown);
+        UpdateButton(wanted && ButtonOn, mood);
+        if (!wanted) return;
         bool moving = mood == Mood.Working || mood == Mood.Thinking || mood == Mood.Needs;
         int size = Math.Max(16, SystemInformation.SmallIconSize.Width);
         int count = liveTasks;
@@ -1365,6 +1370,44 @@ public class PetForm : Form
             trayIcon.Text = tip.Length > 63 ? tip.Substring(0, 63) : tip;
         }
         catch (Exception e) { LogNote("tray icon could not draw: " + e.Message); }
+    }
+
+    // The taskbar button, with the other apps: on while the tray icon is,
+    // its label saying what is going on, its bar and glow showing it.
+    TaskbarButton button;
+    public bool ButtonOn = true;
+    string buttonGlyph = "";
+
+    public void SetButton(bool on) { ButtonOn = on; Save(); UpdateTray(); }
+
+    void UpdateButton(bool on, Mood mood)
+    {
+        if (button == null) return;
+        try
+        {
+            button.Present(on);
+            if (!on) return;
+            TaskItem need = alerts.Find(delegate (TaskItem a) { return a.State == "needs"; });
+            List<TaskItem> done = alerts.FindAll(delegate (TaskItem a) { return a.State != "needs"; });
+            int runs = working + hiddenRuns;
+            string label;
+            int bar;
+            if (need != null) { label = "Needs you · " + need.Title; bar = TaskbarButton.Red; }
+            else if (runs > 0)
+            {
+                label = runs == 1 ? "Running · " + runTitle : runs + " running";
+                if (done.Count > 0) label += " · " + done.Count + " done";
+                bar = TaskbarButton.Moving;
+            }
+            else if (done.Count > 0) { label = "Done · " + done[done.Count - 1].Title + (done.Count > 1 ? " +" + (done.Count - 1) : ""); bar = TaskbarButton.Full; }
+            else { label = "Quiet · Claude tasks"; bar = TaskbarButton.None; }
+            if (label.Length > 120) label = label.Substring(0, 120);
+            string key = mood + "|" + liveTasks;
+            Bitmap glyph = null;
+            if (key != buttonGlyph) { buttonGlyph = key; glyph = TrayGlyph(32, mood, 0.6, liveTasks); }
+            using (glyph) button.Set(label, bar, alerts.Count > 0, glyph);
+        }
+        catch (Exception e) { LogNote("taskbar button: " + e.Message); }
     }
 
     string TrayTip()
@@ -1549,6 +1592,8 @@ public class PetForm : Form
             }
             extraPlanets = Math.Max(0, live.Count - MaxPlanets);
             liveTasks = live.Count;
+            TaskItem run = live.Find(delegate (TaskItem it) { return it.State != "needs"; });
+            runTitle = run == null ? "" : run.Title ?? "";
         }
     }
 
@@ -1769,6 +1814,7 @@ public class PetForm : Form
                         if (s.WorkingArea.Contains(x + 200, y + 120)) { Location = new Point(x, y); placed = true; break; }
                 }
                 if (kv.ContainsKey("sound")) sound = kv["sound"] != "0";
+                if (kv.ContainsKey("button")) ButtonOn = kv["button"] != "0";
                 if (kv.ContainsKey("mode")) Mode = kv["mode"] == "always" || kv["mode"] == "off" ? kv["mode"] : "auto";
                 // Before the modes, the pet was simply shown or hidden.
                 else if (kv.ContainsKey("shown") && kv["shown"] == "0") Mode = "off";
@@ -1781,7 +1827,7 @@ public class PetForm : Form
     {
         try
         {
-            File.WriteAllText(settings, "x=" + Left + "\r\ny=" + Top + "\r\nsound=" + (sound ? 1 : 0) + "\r\nmode=" + Mode + "\r\n");
+            File.WriteAllText(settings, "x=" + Left + "\r\ny=" + Top + "\r\nsound=" + (sound ? 1 : 0) + "\r\nmode=" + Mode + "\r\nbutton=" + (ButtonOn ? 1 : 0) + "\r\n");
         }
         catch { }
     }
@@ -1847,5 +1893,158 @@ public class PetForm : Form
             DeleteObject(dib);
             DeleteDC(dc);
         }
+    }
+}
+
+/* ---------------------------------------------------------------------- *
+ * The taskbar button: the tasks, with the other apps on the taskbar
+ * ---------------------------------------------------------------------- */
+
+// A window kept minimized, so it has a button on the taskbar like any app,
+// and never shows itself. The button's label says what is going on, its
+// progress bar moves green while a task runs, fills green when one has
+// finished and red when one needs you, and it glows orange until you look.
+// A click opens the task list instead of restoring the window.
+public class TaskbarButton : Form
+{
+    [ComImport, Guid("ea1afb91-9e28-4b86-90e9-9e9f8a5eefaf"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface ITaskbarList3
+    {
+        void HrInit();
+        void AddTab(IntPtr h);
+        void DeleteTab(IntPtr h);
+        void ActivateTab(IntPtr h);
+        void SetActiveAlt(IntPtr h);
+        void MarkFullscreenWindow(IntPtr h, [MarshalAs(UnmanagedType.Bool)] bool full);
+        void SetProgressValue(IntPtr h, ulong done, ulong total);
+        void SetProgressState(IntPtr h, int flags);
+        void RegisterTab(IntPtr tab, IntPtr main);
+        void UnregisterTab(IntPtr tab);
+        void SetTabOrder(IntPtr tab, IntPtr before);
+        void SetTabActive(IntPtr tab, IntPtr main, uint reserved);
+        void ThumbBarAddButtons(IntPtr h, uint count, IntPtr buttons);
+        void ThumbBarUpdateButtons(IntPtr h, uint count, IntPtr buttons);
+        void ThumbBarSetImageList(IntPtr h, IntPtr list);
+        void SetOverlayIcon(IntPtr h, IntPtr icon, [MarshalAs(UnmanagedType.LPWStr)] string description);
+    }
+    [ComImport, Guid("56FDF344-FD6D-11d0-958A-006097C9A090")] class TaskbarListClass { }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct FLASHWINFO { public int cbSize; public IntPtr hwnd; public int dwFlags; public int uCount; public int dwTimeout; }
+    [DllImport("user32.dll")] static extern bool FlashWindowEx(ref FLASHWINFO f);
+    [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int RegisterWindowMessage(string name);
+    [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr h);
+
+    public const int None = 0, Moving = 1, Full = 2, Red = 4, Yellow = 8;
+    static readonly int ButtonCreated = RegisterWindowMessage("TaskbarButtonCreated");
+
+    ITaskbarList3 bar;
+    bool ready;
+    int state = -1;
+    bool flashing;
+    IntPtr iconHandle = IntPtr.Zero;
+    Icon icon;
+
+    // A click on the button.
+    public event Action Clicked;
+
+    public TaskbarButton()
+    {
+        Text = "Claude tasks";
+        ShowInTaskbar = true;
+        StartPosition = FormStartPosition.Manual;
+        Location = new Point(-32000, -32000);
+        Size = new Size(200, 60);
+        try { bar = (ITaskbarList3)new TaskbarListClass(); bar.HrInit(); } catch { bar = null; }
+    }
+
+    // Puts the button on the taskbar or takes it off, without ever
+    // showing the window or taking the focus.
+    public void Present(bool on)
+    {
+        IntPtr h = Handle;
+        if (on == IsWindowVisible(h)) return;
+        if (on) ShowWindow(h, 7);       // SW_SHOWMINNOACTIVE
+        else { ShowWindow(h, 0); ready = false; state = -1; flashing = false; }
+    }
+
+    public void Set(string label, int progress, bool flash, Bitmap glyph)
+    {
+        if (Text != label) Text = label;
+        if (glyph != null)
+        {
+            IntPtr h = glyph.GetHicon();
+            Icon next = Icon.FromHandle(h);
+            Icon = next;
+            if (icon != null) icon.Dispose();
+            if (iconHandle != IntPtr.Zero) DestroyIcon(iconHandle);
+            icon = next; iconHandle = h;
+        }
+        if (ready && bar != null && progress != state)
+        {
+            try
+            {
+                bar.SetProgressState(Handle, progress);
+                if (progress == Full || progress == Red || progress == Yellow) bar.SetProgressValue(Handle, 100, 100);
+                state = progress;
+            }
+            catch { }
+        }
+        if (flash != flashing && IsWindowVisible(Handle))
+        {
+            // Three flashes, then it stays lit orange until stopped.
+            FLASHWINFO f = new FLASHWINFO();
+            f.cbSize = Marshal.SizeOf(f);
+            f.hwnd = Handle;
+            f.dwFlags = flash ? 2 : 0;      // FLASHW_TRAY, or FLASHW_STOP
+            f.uCount = flash ? 3 : 0;
+            FlashWindowEx(ref f);
+            flashing = flash;
+        }
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == ButtonCreated)
+        {
+            ready = true;
+            int want = state; state = -1;
+            if (want >= 0) Set(Text, want, flashing, null);
+        }
+        // A click asks the minimized window to come back. It stays down and
+        // opens the task list instead.
+        if (m.Msg == 0x0112 && ((int)m.WParam & 0xFFF0) == 0xF120)  // WM_SYSCOMMAND, SC_RESTORE
+        {
+            Action c = Clicked;
+            if (c != null) c();
+            return;
+        }
+        // Never let it be shown full size, from Alt+Tab or anywhere else.
+        if (m.Msg == 0x0112 && ((int)m.WParam & 0xFFF0) == 0xF030) return;   // SC_MAXIMIZE
+        base.WndProc(ref m);
+    }
+
+    [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+
+    protected override void OnActivated(EventArgs e)
+    {
+        base.OnActivated(e);
+        // Brought up some other way, from Alt+Tab say: back down it goes,
+        // and the list opens.
+        if (!IsIconic(Handle))
+        {
+            ShowWindow(Handle, 7);
+            Action c = Clicked;
+            if (c != null) c();
+        }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing && icon != null) icon.Dispose();
+        if (iconHandle != IntPtr.Zero) { DestroyIcon(iconHandle); iconHandle = IntPtr.Zero; }
+        base.Dispose(disposing);
     }
 }
