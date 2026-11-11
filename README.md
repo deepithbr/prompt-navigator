@@ -130,7 +130,7 @@ The tray icon is Voidling in miniature, so the pet can live in the taskbar inste
 
 ![The tray icon at rest, running, with three running, finished, finished with two running, needing you, and for a hidden run, on a dark and a light taskbar](docs/screenshots/tray-states.png)
 
-Windows 11 tucks new tray icons into the overflow behind the ^ arrow. To keep this one by the clock, drag it out of the overflow onto the taskbar, or turn it on under **Settings > Personalization > Taskbar > Other system tray icons**, where it is listed as Windows PowerShell.
+Windows 11 tucks new tray icons into the overflow behind the ^ arrow. To keep this one by the clock, drag it out of the overflow onto the taskbar, or turn it on under **Settings > Personalization > Taskbar > Other system tray icons**. Look for Windows PowerShell there, the program the companion runs in.
 
 ---
 
