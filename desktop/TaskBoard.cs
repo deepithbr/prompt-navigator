@@ -214,11 +214,20 @@ public class TaskBoard
      * The window
      * -------------------------------------------------------------- */
 
-    public void Show()
+    // Somewhere the list must keep clear of, such as the desk pet while it
+    // is on screen. Empty when there is nothing to avoid.
+    public Func<Rectangle> Avoid;
+
+    public void Show() { Show(null); }
+
+    // at: where the click that opened it landed, on the taskbar button or
+    // the tray icon, so the list opens just above it.
+    public void Show(Point? at)
     {
         ui.BeginInvoke((Action)delegate
         {
             if (form == null || form.IsDisposed) form = new BoardForm(this);
+            form.Anchor_ = at;
             form.Fill(Snapshot());
             form.Show();
             form.WindowState = FormWindowState.Normal;
@@ -1253,7 +1262,11 @@ public class BoardForm : Form
     static readonly Color Orange = Color.FromArgb(217, 119, 87);
 
     // Layout in pixels at 100% scaling.
-    const int Wd = 400, Ht = 500, Head = 76, Foot = 48, RowH = 58, SecH = 32;
+    const int Wd = 400, MaxHt = 500, MinHt = 240, Head = 76, Foot = 48, RowH = 58, SecH = 32;
+    // As tall as its tasks need, between MinHt and MaxHt.
+    int Ht = MaxHt;
+    // Where the click that opened it landed, or none.
+    public Point? Anchor_;
 
     [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int attr, ref int value, int size);
 
@@ -1333,10 +1346,7 @@ public class BoardForm : Form
         base.OnVisibleChanged(e);
         if (!Visible) { tick.Enabled = false; return; }
         try { scale = Math.Max(1f, Native.GetDpiForWindow(Handle) / 96f); } catch { scale = 1f; }
-        Size = new Size((int)(Wd * scale), (int)(Ht * scale));
-        // Above the tray and clear of the desk pet, which sits in the corner.
-        Rectangle wa = Screen.FromPoint(Cursor.Position).WorkingArea;
-        Location = new Point(wa.Right - Width - (int)(12 * scale), Math.Max(wa.Top + 12, wa.Bottom - Height - (int)(206 * scale)));
+        Place();
         scroll = 0;
         hover = -1;
         Opacity = 0.2;
@@ -1382,7 +1392,29 @@ public class BoardForm : Form
             y += 4;
         }
         contentH = y;
+        Ht = Math.Max(MinHt, Math.Min(MaxHt, (int)Math.Ceiling(Head + contentH + 4 + Foot)));
         scroll = Math.Max(0, Math.Min(scroll, MaxScroll()));
+        if (Visible) Place();
+    }
+
+    // Just above the taskbar, centred on the button or icon that was
+    // clicked, the way Windows opens its own menus from the taskbar. Opened
+    // any other way, it sits at the right, above the clock. It keeps clear
+    // of the desk pet when the pet is on screen.
+    void Place()
+    {
+        Size = new Size((int)(Wd * scale), (int)(Ht * scale));
+        Point at = Anchor_ ?? Cursor.Position;
+        Rectangle wa = Screen.FromPoint(at).WorkingArea;
+        int gap = (int)(12 * scale);
+        bool onTaskbar = Anchor_.HasValue && at.Y >= wa.Bottom;
+        int x = onTaskbar ? at.X - Width / 2 : wa.Right - Width - gap;
+        x = Math.Max(wa.Left + gap, Math.Min(x, wa.Right - Width - gap));
+        int y = wa.Bottom - Height - gap;
+        Func<Rectangle> avoid = board.Avoid;
+        Rectangle keep = avoid != null ? avoid() : Rectangle.Empty;
+        if (!keep.IsEmpty && new Rectangle(x, y, Width, Height).IntersectsWith(keep)) y = keep.Top - Height - gap;
+        Location = new Point(x, Math.Max(wa.Top + gap, y));
     }
 
     float ViewH { get { return Ht - Head - Foot; } }
