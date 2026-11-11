@@ -35,7 +35,9 @@ public static class AdvisorHost
 
     // Called by PromptAdvisor.ps1 on its STA thread. dir is the folder holding
     // advisor-cli.js.
-    public static void Run(string dir)
+    public static void Run(string dir) { Run(dir, false); }
+
+    public static void Run(string dir, bool show)
     {
         // Per-monitor aware, so the rectangles UI Automation reports and the
         // position of the hint are in the same pixels on every screen.
@@ -47,9 +49,10 @@ public static class AdvisorHost
         Mutex one = new Mutex(true, "PromptAdvisorDesktop", out first);
         if (!first)
         {
-            // Launched again while running: open the task list in the copy
-            // that runs, which also brings its tray icon back for a minute.
-            if (AskRunningToShow()) return;
+            // Launched again by hand while running: open the task list in the
+            // copy that runs, which also brings its icon back for a minute.
+            // The scheduled task's own launches only check it is running.
+            if (show && AskRunningToShow()) return;
             try { if (!one.WaitOne(5000)) return; }
             catch (AbandonedMutexException) { }
         }

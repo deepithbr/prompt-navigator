@@ -1300,7 +1300,7 @@ public class PetForm : Form
     // hidden. With the pet away it also reads the board once a second and
     // puts away finishes you have gone and looked at, as the pet would.
     readonly Timer trayTick = new Timer();
-    int trayTicks;
+    int trayTicks, trayFaults;
 
     // The icon shows only while there is something to show: from the
     // moment a task starts until 30 seconds after the last one has ended
@@ -1346,8 +1346,17 @@ public class PetForm : Form
         trayTick.Interval = 100;
         trayTick.Tick += delegate
         {
-            if (!Visible && ++trayTicks % 10 == 0) { Sync(); ClearSeen(); }
-            UpdateTray();
+            // A fault here is logged and skipped, never thrown: the icon must
+            // not take the companion down, or raise a dialog nobody asked for.
+            try
+            {
+                if (!Visible && ++trayTicks % 10 == 0) { Sync(); ClearSeen(); }
+                UpdateTray();
+            }
+            catch (Exception e)
+            {
+                if (++trayFaults == 1 || trayFaults % 600 == 0) LogNote("taskbar icon skipped a tick (" + trayFaults + "): " + e.Message);
+            }
         };
         trayTick.Enabled = true;
         UpdateTray();

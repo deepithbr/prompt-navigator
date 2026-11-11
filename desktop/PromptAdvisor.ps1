@@ -12,7 +12,9 @@
 # The task board's listener and watcher threads would outlive a crash here and
 # keep the port, so a second board in the same process could never listen.
 
-param([int]$Attempt = 1)
+# -Show, from Start.cmd: if a copy is already running, open its task list.
+# The scheduled task's launches at logon and unlock leave that out.
+param([int]$Attempt = 1, [switch]$Show)
 
 $dir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $log = Join-Path $env:TEMP 'PromptAdvisor.log'
@@ -35,7 +37,7 @@ try {
 Note "started (attempt $Attempt)"
 try {
   # Returns when you choose Exit, or at once if another copy is running.
-  [AdvisorHost]::Run($dir)
+  [AdvisorHost]::Run($dir, [bool]$Show)
   Note 'stopped'
 } catch {
   Note "crashed: $($_.Exception.ToString())"
