@@ -1314,6 +1314,7 @@ public class PetForm : Form
     {
         trayIcon = tray;
         trayBase = tray.Text;
+        trayStatic = tray.Icon;
         trayWakeAt = clock.Elapsed.TotalSeconds;
         board.Shown += delegate { trayWakeAt = clock.Elapsed.TotalSeconds; UpdateTray(); };
         button = new TaskbarButton();
@@ -1338,16 +1339,38 @@ public class PetForm : Form
         UpdateTray();
     }
 
+    // The app's own icon, which the tray keeps while the taskbar button
+    // carries the state, so its menu can always be reached.
+    Icon trayStatic;
+    bool trayPlain;
+
     void UpdateTray()
     {
         if (trayIcon == null) return;
         double t = clock.Elapsed.TotalSeconds;
         if (Busy()) trayBusyAt = t;
         bool wanted = Mode == "always" || t - trayBusyAt < TrayIdle || t - trayWakeAt < TrayWake;
-        if (trayIcon.Visible != wanted) trayIcon.Visible = wanted;
         TaskItem shown;
         Mood mood = PickMood(t, out shown);
-        UpdateButton(wanted && ButtonOn, mood);
+        UpdateButton(wanted && ButtonOn, mood, t);
+        string tip = trayBase + TrayTip();
+        if (tip.Length > 63) tip = tip.Substring(0, 63);
+        if (ButtonOn)
+        {
+            if (!trayPlain)
+            {
+                trayIcon.Icon = trayStatic;
+                if (trayShown != null) { trayShown.Dispose(); trayShown = null; }
+                if (trayHandle != IntPtr.Zero) { DestroyIcon(trayHandle); trayHandle = IntPtr.Zero; }
+                trayPlain = true;
+                trayKey = "";
+            }
+            if (!trayIcon.Visible) trayIcon.Visible = true;
+            if (trayIcon.Text != tip) trayIcon.Text = tip;
+            return;
+        }
+        trayPlain = false;
+        if (trayIcon.Visible != wanted) trayIcon.Visible = wanted;
         if (!wanted) return;
         bool moving = mood == Mood.Working || mood == Mood.Thinking || mood == Mood.Needs;
         int size = Math.Max(16, SystemInformation.SmallIconSize.Width);
@@ -1366,48 +1389,89 @@ public class PetForm : Form
             if (trayHandle != IntPtr.Zero) DestroyIcon(trayHandle);
             trayShown = next;
             trayHandle = h;
-            string tip = trayBase + TrayTip();
-            trayIcon.Text = tip.Length > 63 ? tip.Substring(0, 63) : tip;
+            trayIcon.Text = tip;
         }
         catch (Exception e) { LogNote("tray icon could not draw: " + e.Message); }
     }
 
-    // The taskbar button, with the other apps: on while the tray icon is,
-    // its label saying what is going on, its bar and glow showing it.
+    // The taskbar button, with the other apps: the one place the tasks show.
+    // Its icon is Voidling, redrawn ten times a second while something
+    // moves; a badge in its corner counts the tasks running or waiting on
+    // you; its label starts with the state; it flashes once when a task
+    // finishes or needs you; a click opens the task list.
     TaskbarButton button;
     public bool ButtonOn = true;
-    string buttonGlyph = "";
+    string buttonGlyph = "", buttonBadge = "";
 
     public void SetButton(bool on) { ButtonOn = on; Save(); UpdateTray(); }
 
-    void UpdateButton(bool on, Mood mood)
+    void UpdateButton(bool on, Mood mood, double t)
     {
         if (button == null) return;
         try
         {
             button.Present(on);
-            if (!on) return;
+            if (!on) { buttonGlyph = buttonBadge = ""; return; }
             TaskItem need = alerts.Find(delegate (TaskItem a) { return a.State == "needs"; });
             List<TaskItem> done = alerts.FindAll(delegate (TaskItem a) { return a.State != "needs"; });
             int runs = working + hiddenRuns;
             string label;
-            int bar;
-            if (need != null) { label = "Needs you · " + need.Title; bar = TaskbarButton.Red; }
+            if (need != null) label = "Needs you · " + need.Title;
             else if (runs > 0)
             {
                 label = runs == 1 ? "Running · " + runTitle : runs + " running";
                 if (done.Count > 0) label += " · " + done.Count + " done";
-                bar = TaskbarButton.Moving;
             }
-            else if (done.Count > 0) { label = "Done · " + done[done.Count - 1].Title + (done.Count > 1 ? " +" + (done.Count - 1) : ""); bar = TaskbarButton.Full; }
-            else { label = "Quiet · Claude tasks"; bar = TaskbarButton.None; }
+            else if (done.Count > 0) label = "Done · " + done[done.Count - 1].Title + (done.Count > 1 ? " +" + (done.Count - 1) : "");
+            else label = "Quiet · Claude tasks";
             if (label.Length > 120) label = label.Substring(0, 120);
-            string key = mood + "|" + liveTasks;
+
+            bool moving = mood == Mood.Working || mood == Mood.Thinking || mood == Mood.Needs;
+            int size = Math.Max(32, SystemInformation.IconSize.Width);
+            string key = mood + "|" + size + "|" + (moving ? ((long)(t * 10)).ToString() : "");
             Bitmap glyph = null;
-            if (key != buttonGlyph) { buttonGlyph = key; glyph = TrayGlyph(32, mood, 0.6, liveTasks); }
-            using (glyph) button.Set(label, bar, alerts.Count > 0, glyph);
+            if (key != buttonGlyph) { buttonGlyph = key; glyph = TrayGlyph(size, mood, t, 0); }
+
+            int count = liveTasks;
+            string badgeKey = count + "|" + (need != null) + "|" + (runs > 0);
+            bool badgeChanged = badgeKey != buttonBadge;
+            Bitmap badge = null;
+            string badgeText = "";
+            if (badgeChanged)
+            {
+                buttonBadge = badgeKey;
+                if (count > 0)
+                {
+                    badge = BadgeGlyph(Math.Max(16, SystemInformation.SmallIconSize.Width), count, need != null);
+                    badgeText = count + (count == 1 ? " task" : " tasks");
+                }
+            }
+            using (glyph)
+            using (badge)
+                button.Set(label, alerts.Count > 0, glyph, badgeChanged, badge, badgeText);
         }
         catch (Exception e) { LogNote("taskbar button: " + e.Message); }
+    }
+
+    // The count in the corner of the button: gold for tasks running, red
+    // when one of them waits on you.
+    static Bitmap BadgeGlyph(int s, int count, bool needs)
+    {
+        Bitmap b = new Bitmap(s, s, PixelFormat.Format32bppArgb);
+        using (Graphics g = Graphics.FromImage(b))
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+            g.Clear(Color.Transparent);
+            Color fill = needs ? Color.FromArgb(226, 46, 52) : Gold2;
+            using (SolidBrush f = new SolidBrush(fill)) g.FillEllipse(f, 0.5f, 0.5f, s - 1, s - 1);
+            using (Pen o = new Pen(Color.FromArgb(200, Void), 1f)) g.DrawEllipse(o, 0.5f, 0.5f, s - 1, s - 1);
+            string n = count > 9 ? "9+" : count.ToString();
+            using (Font font = new Font("Segoe UI", s * (n.Length > 1 ? 0.5f : 0.66f), FontStyle.Bold, GraphicsUnit.Pixel))
+            using (SolidBrush ink = new SolidBrush(needs ? Color.White : Void))
+                g.DrawString(n, font, ink, new RectangleF(-2, -1, s + 4, s + 2), Centre);
+        }
+        return b;
     }
 
     string TrayTip()
@@ -1937,13 +2001,14 @@ public class TaskbarButton : Form
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int RegisterWindowMessage(string name);
     [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr h);
 
-    public const int None = 0, Moving = 1, Full = 2, Red = 4, Yellow = 8;
     static readonly int ButtonCreated = RegisterWindowMessage("TaskbarButtonCreated");
 
     ITaskbarList3 bar;
     bool ready;
-    int state = -1;
     bool flashing;
+    IntPtr badgeHandle = IntPtr.Zero;
+    string badgeLabel = "";
+    bool badgeSent = true;
     IntPtr iconHandle = IntPtr.Zero;
     Icon icon;
 
@@ -1967,10 +2032,13 @@ public class TaskbarButton : Form
         IntPtr h = Handle;
         if (on == IsWindowVisible(h)) return;
         if (on) ShowWindow(h, 7);       // SW_SHOWMINNOACTIVE
-        else { ShowWindow(h, 0); ready = false; state = -1; flashing = false; }
+        else { ShowWindow(h, 0); ready = false; badgeSent = false; flashing = false; }
     }
 
-    public void Set(string label, int progress, bool flash, Bitmap glyph)
+    // The button's look: its label, its icon (when given) and the badge in
+    // its corner (when changed; none clears it). It flashes once when
+    // flash turns on. The thin progress line Windows 11 draws is left off.
+    public void Set(string label, bool flash, Bitmap glyph, bool badgeChanged, Bitmap badge, string badgeText)
     {
         if (Text != label) Text = label;
         if (glyph != null)
@@ -1982,25 +2050,29 @@ public class TaskbarButton : Form
             if (iconHandle != IntPtr.Zero) DestroyIcon(iconHandle);
             icon = next; iconHandle = h;
         }
-        if (ready && bar != null && progress != state)
+        if (badgeChanged)
         {
-            try
-            {
-                bar.SetProgressState(Handle, progress);
-                if (progress == Full || progress == Red || progress == Yellow) bar.SetProgressValue(Handle, 100, 100);
-                state = progress;
-            }
-            catch { }
+            IntPtr h = badge != null ? badge.GetHicon() : IntPtr.Zero;
+            if (badgeHandle != IntPtr.Zero) DestroyIcon(badgeHandle);
+            badgeHandle = h;
+            badgeLabel = badgeText ?? "";
+            badgeSent = false;
+        }
+        if (ready && bar != null && !badgeSent)
+        {
+            try { bar.SetOverlayIcon(Handle, badgeHandle, badgeLabel); badgeSent = true; } catch { }
         }
         if (flash != flashing && IsWindowVisible(Handle))
         {
-            // Three flashes, then it stays lit orange until stopped.
-            FLASHWINFO f = new FLASHWINFO();
-            f.cbSize = Marshal.SizeOf(f);
-            f.hwnd = Handle;
-            f.dwFlags = flash ? 2 : 0;      // FLASHW_TRAY, or FLASHW_STOP
-            f.uCount = flash ? 3 : 0;
-            FlashWindowEx(ref f);
+            if (flash)
+            {
+                FLASHWINFO f = new FLASHWINFO();
+                f.cbSize = Marshal.SizeOf(f);
+                f.hwnd = Handle;
+                f.dwFlags = 2;      // FLASHW_TRAY
+                f.uCount = 3;
+                FlashWindowEx(ref f);
+            }
             flashing = flash;
         }
     }
@@ -2010,8 +2082,8 @@ public class TaskbarButton : Form
         if (m.Msg == ButtonCreated)
         {
             ready = true;
-            int want = state; state = -1;
-            if (want >= 0) Set(Text, want, flashing, null);
+            badgeSent = false;
+            Set(Text, flashing, null, false, null, null);
         }
         // A click asks the minimized window to come back. It stays down and
         // opens the task list instead.
@@ -2045,6 +2117,7 @@ public class TaskbarButton : Form
     {
         if (disposing && icon != null) icon.Dispose();
         if (iconHandle != IntPtr.Zero) { DestroyIcon(iconHandle); iconHandle = IntPtr.Zero; }
+        if (badgeHandle != IntPtr.Zero) { DestroyIcon(badgeHandle); badgeHandle = IntPtr.Zero; }
         base.Dispose(disposing);
     }
 }
