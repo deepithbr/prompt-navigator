@@ -58,6 +58,8 @@ public class TaskBoard
     // For the desk pet. Both are raised on the board's own threads.
     public event Action Changed;
     public event Action<TaskItem> Alerted;
+    // The task list was opened, from the tray, a notification or a second launch.
+    public event Action Shown;
 
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
@@ -221,6 +223,8 @@ public class TaskBoard
             form.Show();
             form.WindowState = FormWindowState.Normal;
             form.Activate();
+            Action s = Shown;
+            if (s != null) s();
         });
     }
 

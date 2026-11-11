@@ -1300,10 +1300,20 @@ public class PetForm : Form
     readonly Timer trayTick = new Timer();
     int trayTicks;
 
+    // The icon shows only while there is something to show: from the
+    // moment a task starts until 30 seconds after the last one has ended
+    // and nothing waits on you, as the pet does. Opening the task list,
+    // by launching Start.cmd again, brings it back for a minute so the
+    // menu can be reached. With the pet set to Always show, so is it.
+    const double TrayIdle = 30, TrayWake = 60;
+    double trayBusyAt = -1000, trayWakeAt = -1000;
+
     public void AttachTray(NotifyIcon tray)
     {
         trayIcon = tray;
         trayBase = tray.Text;
+        trayWakeAt = clock.Elapsed.TotalSeconds;
+        board.Shown += delegate { trayWakeAt = clock.Elapsed.TotalSeconds; UpdateTray(); };
         trayTick.Interval = 100;
         trayTick.Tick += delegate
         {
@@ -1328,6 +1338,10 @@ public class PetForm : Form
     {
         if (trayIcon == null) return;
         double t = clock.Elapsed.TotalSeconds;
+        if (Busy()) trayBusyAt = t;
+        bool wanted = Mode == "always" || t - trayBusyAt < TrayIdle || t - trayWakeAt < TrayWake;
+        if (trayIcon.Visible != wanted) trayIcon.Visible = wanted;
+        if (!wanted) return;
         TaskItem shown;
         Mood mood = PickMood(t, out shown);
         bool moving = mood == Mood.Working || mood == Mood.Thinking || mood == Mood.Needs;

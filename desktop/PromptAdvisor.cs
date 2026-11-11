@@ -47,6 +47,9 @@ public static class AdvisorHost
         Mutex one = new Mutex(true, "PromptAdvisorDesktop", out first);
         if (!first)
         {
+            // Launched again while running: open the task list in the copy
+            // that runs, which also brings its tray icon back for a minute.
+            if (AskRunningToShow()) return;
             try { if (!one.WaitOne(5000)) return; }
             catch (AbandonedMutexException) { }
         }
@@ -60,6 +63,23 @@ public static class AdvisorHost
         catch (InvalidOperationException) { }
         Application.Run(new AdvisorContext(dir));
         GC.KeepAlive(one);
+    }
+
+    // Whether a running copy answered a request to open its task list.
+    static bool AskRunningToShow()
+    {
+        try
+        {
+            System.Net.HttpWebRequest r = (System.Net.HttpWebRequest)System.Net.WebRequest.Create("http://127.0.0.1:" + TaskBoard.Port + "/show");
+            r.Method = "POST";
+            r.Headers["X-Prompt-Advisor"] = "1";
+            r.ContentLength = 0;
+            r.Timeout = 1500;
+            r.Proxy = null;
+            using (System.Net.HttpWebResponse a = (System.Net.HttpWebResponse)r.GetResponse())
+                return (int)a.StatusCode < 300;
+        }
+        catch { return false; }
     }
 }
 
