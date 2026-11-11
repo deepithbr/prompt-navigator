@@ -1338,7 +1338,8 @@ public class PetForm : Form
         button = new TaskbarButton();
         // Opening the list from the button is looking: finishes are put away
         // and, with nothing else going on, the button leaves at once.
-        button.Clicked += delegate { quietWake = true; board.Show(); TrayOpened(); Settle(); };
+        button.Clicked += delegate { quietWake = true; board.Show(Cursor.Position); TrayOpened(); Settle(); };
+        board.Avoid = delegate { return Visible ? Bounds : Rectangle.Empty; };
         // Resting on it shows the card; two seconds later the finishes it
         // named count as seen.
         button.Hovered += delegate { if (alerts.Exists(delegate (TaskItem a) { return a.State != "needs"; })) hoverSeenAt = clock.Elapsed.TotalSeconds + 2; };
