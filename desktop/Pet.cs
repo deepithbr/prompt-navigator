@@ -1338,7 +1338,7 @@ public class PetForm : Form
         button = new TaskbarButton();
         // Opening the list from the button is looking: finishes are put away
         // and, with nothing else going on, the button leaves at once.
-        button.Clicked += delegate { quietWake = true; board.Show(Cursor.Position); TrayOpened(); Settle(); };
+        button.Clicked += delegate { OpenFromTaskbar(Cursor.Position); };
         board.Avoid = delegate { return Visible ? Bounds : Rectangle.Empty; };
         // Resting on it shows the card; two seconds later the finishes it
         // named count as seen.
@@ -1361,6 +1361,38 @@ public class PetForm : Form
         };
         trayTick.Enabled = true;
         UpdateTray();
+    }
+
+    // A click on the taskbar button or the tray icon. With just one task to
+    // show, running, finished or waiting on you, it opens that task's app
+    // or conversation straight away. With more, or none, the list opens
+    // above the click. Either way finishes count as seen, and with nothing
+    // else going on the button leaves.
+    public void OpenFromTaskbar(Point at)
+    {
+        TaskItem one = OnlyTask();
+        if (one != null) board.Open(one);
+        else { quietWake = true; board.Show(at); }
+        TrayOpened();
+        Settle();
+    }
+
+    // The one task the hover card would show, or null when it would show
+    // more than one or none: needs you and running, then finishes not yet
+    // seen, each task once.
+    TaskItem OnlyTask()
+    {
+        Dictionary<string, TaskItem> shown = new Dictionary<string, TaskItem>();
+        foreach (TaskItem it in board.Snapshot())
+        {
+            bool live = it.State == "needs" || it.State == "working" || it.State == "hidden";
+            if (live && (DateTime.Now - it.Updated).TotalHours < 3) shown[it.Key] = it;
+            if (shown.Count > 1) return null;
+        }
+        foreach (TaskItem a in alerts) if (!shown.ContainsKey(a.Key)) shown[a.Key] = a;
+        if (shown.Count != 1) return null;
+        foreach (TaskItem it in shown.Values) return it;
+        return null;
     }
 
     // Opening the list from the tray counts as looking: finishes are put
