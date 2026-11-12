@@ -329,7 +329,7 @@ class AdvisorContext : ApplicationContext
 
         // The task board: left-click the icon, or a notification, to open it.
         board = new TaskBoard(tray, hint);
-        tray.MouseClick += delegate (object s, MouseEventArgs e) { if (e.Button == MouseButtons.Left) { board.Show(Cursor.Position); if (pet != null) pet.TrayOpened(); } };
+        tray.MouseClick += delegate (object s, MouseEventArgs e) { if (e.Button != MouseButtons.Left) return; if (pet != null) pet.OpenFromTaskbar(Cursor.Position); else board.Show(Cursor.Position); };
         tray.BalloonTipClicked += delegate { board.Show(); if (pet != null) pet.TrayOpened(); };
 
         // The desk pet in the corner of the screen, fed by the board, and

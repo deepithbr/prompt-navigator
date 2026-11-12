@@ -133,7 +133,7 @@ The tasks live in one button on the taskbar, with your other apps. Its icon is a
 
 ![The hover card: one task needing approval, two running and one finished](docs/screenshots/hover-card.png)
 
-A finish counts as seen two seconds after the card has shown it, or as soon as you click the button, which opens the task list. Either way, with nothing else running or waiting on you, the button leaves at once. A request for your approval stays until it is answered.
+A click on the button, or on the tray icon, opens the one task straight away when there is only one to show, running, finished or waiting on you: its app comes forward, or its conversation opens in Brave. With more than one, the task list opens instead. A finish counts as seen two seconds after the card has shown it, or as soon as you click. Either way, with nothing else running or waiting on you, the button leaves at once. A request for your approval stays until it is answered.
 
 Otherwise the button is there only while something is going on. It appears when a task starts and leaves 30 seconds after the last one ends with nothing waiting on you. Running `desktop\Start.cmd` again while the companion runs opens the task list and brings the button back for a minute.
 
