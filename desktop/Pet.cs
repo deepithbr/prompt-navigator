@@ -1564,9 +1564,11 @@ public class PetForm : Form
         return parts.Count == 0 ? "" : "\n" + string.Join(", ", parts.ToArray());
     }
 
-    // The icon itself, size pixels square: the disk nearly edge-on, its far
-    // half behind the void and its near half across it, a thin arch of
-    // light bent over the top, and the count in the corner.
+    // The icon, size pixels square: an origami crane in profile, drawn on a
+    // 100-unit grid. While a task runs its wing flaps; once one finishes it
+    // folds its wing and turns blue; when one needs you it turns crimson and
+    // pulses; at rest it sits folded in dim amber. A thin dark edge keeps it
+    // readable on a light taskbar, and the count goes in the corner.
     static Bitmap TrayGlyph(int s, Mood mood, double t, int count)
     {
         Bitmap b = new Bitmap(s, s, PixelFormat.Format32bppArgb);
@@ -1575,61 +1577,70 @@ public class PetForm : Form
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
             g.Clear(Color.Transparent);
-            Color ring;
+            Color body, wing;
             float lit = 1;
+            bool flapping = false;
+            double beat = 0.9;              // seconds a wingbeat takes
             switch (mood)
             {
-                case Mood.Working:
-                case Mood.Thinking: ring = Gold2; break;
-                case Mood.Done: ring = BlueWhite; break;
-                case Mood.Needs: ring = Color.FromArgb(255, 84, 84); lit = 0.5f + 0.5f * (float)(0.5 + 0.5 * Math.Sin(t * 4)); break;
-                case Mood.Hidden: ring = Blend(Gold2, Void, 0.45f); lit = 0.8f; break;
-                default: ring = Color.FromArgb(214, 136, 80); lit = 0.75f; break;
+                case Mood.Thinking: body = CraneGold; wing = CraneGoldDeep; flapping = true; beat = 0.65; break;
+                case Mood.Working: body = CraneGold; wing = CraneGoldDeep; flapping = true; break;
+                case Mood.Done: body = CraneBlue; wing = CraneBlueDeep; break;
+                case Mood.Needs:
+                    body = CraneRed; wing = Crimson;
+                    lit = 0.55f + 0.45f * (float)(0.5 + 0.5 * Math.Sin(t * 4));
+                    break;
+                case Mood.Hidden: body = Blend(CraneGold, Void, 0.4f); wing = Blend(CraneGoldDeep, Void, 0.4f); break;
+                default: body = Color.FromArgb(214, 160, 104); wing = Color.FromArgb(176, 112, 58); lit = 0.85f; break;
             }
             bool badge = count > 1;
-            // With a number in the corner, the hole moves up and left a little.
-            float c = badge ? s * 0.44f : s * 0.5f;
-            float r = s * 0.22f, rx = s * 0.47f, ry = s * 0.14f;
-            float w = Math.Max(1.3f, s / 13f);
-            Color edge = Color.FromArgb(Clamp(255 * lit), ring);
+            float k = s / 100f * (badge ? 0.86f : 1f);
+            // Centred on its own outline, which sits a little low on the grid.
+            float ox = badge ? -s * 0.02f : 0, oy = (badge ? -s * 0.04f : 0) - s * 0.06f;
+            Func<float, float, PointF> P = delegate (float x, float y) { return new PointF(ox + x * k, oy + y * k); };
 
-            g.TranslateTransform(c, c);
-            g.RotateTransform(-12);
-            // A dark edge under the strokes, so the light rings still read
-            // on a light taskbar.
-            using (Pen shade = new Pen(Color.FromArgb(110, Void), w + 1.6f))
+            // The classic folded crane: a diamond body, the tail rising to
+            // the left and the neck to the right in a V, the head bent down.
+            PointF[] bodyPts = { P(30, 64), P(50, 56), P(70, 64), P(50, 76) };
+            PointF[] tail = { P(6, 32), P(46, 60), P(30, 70) };
+            PointF[] neck = { P(54, 70), P(72, 60), P(90, 22) };
+            PointF[] beak = { P(90, 22), P(98, 31), P(85, 29) };
+            // The wing: a tall fold above the back, beating while it works,
+            // folded down along the body otherwise.
+            PointF[] wingPts;
+            if (flapping)
             {
-                g.DrawEllipse(shade, -rx, -ry, 2 * rx, 2 * ry);
-                g.DrawArc(shade, -r * 1.45f, -r * 1.45f, 2.9f * r, 2.9f * r, 200, 140);
+                // Down fast, up slower, the way a wingbeat looks; the tip
+                // swings from high above the back to below the body.
+                double ph = (t / beat) % 1.0;
+                double c = ph < 0.4 ? Math.Cos(ph / 0.4 * Math.PI) : -Math.Cos((ph - 0.4) / 0.6 * Math.PI);
+                float lift = (float)(0.15 + 0.85 * c);         // 1 up, -0.7 down
+                float hinge = 60;
+                wingPts = new[] { P(38, 61), P(50 - 4 * lift, hinge + (12 - hinge) * lift), P(62, 60) };
             }
-            using (Pen far = new Pen(Color.FromArgb(Clamp(170 * lit), ring), w))
-                g.DrawArc(far, -rx, -ry, 2 * rx, 2 * ry, 180, 180);
-            using (Pen arch = new Pen(Color.FromArgb(Clamp(150 * lit), ring), Math.Max(1f, w * 0.7f)))
-                g.DrawArc(arch, -r * 1.45f, -r * 1.45f, 2.9f * r, 2.9f * r, 200, 140);
-            using (SolidBrush v = new SolidBrush(Void)) g.FillEllipse(v, -r, -r, 2 * r, 2 * r);
-            using (Pen photon = new Pen(edge, Math.Max(1f, w * 0.8f))) g.DrawEllipse(photon, -r, -r, 2 * r, 2 * r);
+            else wingPts = new[] { P(36, 62), P(58, 40), P(64, 62) };
+            PointF[][] paper = { tail, neck, beak, bodyPts };
 
-            // A bright spot circles the disk while a task runs, hidden as it
-            // passes behind the void.
-            double a = t * 2 * Math.PI / 2.4;
-            float hx = (float)Math.Cos(a) * rx * 0.86f, hy = (float)Math.Sin(a) * ry * 0.86f;
-            bool spot = mood == Mood.Working || mood == Mood.Thinking;
-            bool behind = Math.Sin(a) < 0 && Math.Abs(hx) < r;
-            using (Pen near = new Pen(edge, w * 1.25f))
-                g.DrawArc(near, -rx, -ry, 2 * rx, 2 * ry, 0, 180);
-            if (spot && !behind)
+            float edge = Math.Max(1f, s / 22f);
+            using (Pen shade = new Pen(Color.FromArgb(120, Void), edge * 1.6f))
             {
-                float d = Math.Max(2.4f, s / 7f);
-                using (SolidBrush hot = new SolidBrush(HotWhite)) g.FillEllipse(hot, hx - d / 2, hy - d / 2, d, d);
+                shade.LineJoin = LineJoin.Round;
+                foreach (PointF[] part in paper) g.DrawPolygon(shade, part);
+                g.DrawPolygon(shade, wingPts);
             }
-            g.ResetTransform();
+            using (SolidBrush bb = new SolidBrush(Color.FromArgb(Clamp(255 * lit), body)))
+                foreach (PointF[] part in paper) g.FillPolygon(bb, part);
+            using (SolidBrush wb = new SolidBrush(Color.FromArgb(Clamp(255 * lit), wing))) g.FillPolygon(wb, wingPts);
+            // A crease down the body, the fold that makes it read as paper.
+            using (Pen crease = new Pen(Color.FromArgb(Clamp(110 * lit), wing), Math.Max(0.8f, s / 40f)))
+                g.DrawLine(crease, P(30, 64), P(70, 64));
 
             if (badge)
             {
                 string n = count > 9 ? "9+" : count.ToString();
                 float br = s * 0.27f, bx = s - br, by = s - br;
                 using (SolidBrush bg = new SolidBrush(Color.FromArgb(240, 20, 18, 26))) g.FillEllipse(bg, bx - br, by - br, 2 * br, 2 * br);
-                using (Pen o = new Pen(edge, 1f)) g.DrawEllipse(o, bx - br + 0.5f, by - br + 0.5f, 2 * br - 1, 2 * br - 1);
+                using (Pen o = new Pen(Color.FromArgb(Clamp(255 * lit), body), 1f)) g.DrawEllipse(o, bx - br + 0.5f, by - br + 0.5f, 2 * br - 1, 2 * br - 1);
                 using (Font f = new Font("Segoe UI", s * (n.Length > 1 ? 0.3f : 0.4f), FontStyle.Bold, GraphicsUnit.Pixel))
                 using (SolidBrush ink = new SolidBrush(Color.White))
                     g.DrawString(n, f, ink, new RectangleF(bx - br - 2, by - br - 1, 2 * br + 4, 2 * br + 2), Centre);
@@ -1637,6 +1648,12 @@ public class PetForm : Form
         }
         return b;
     }
+
+    static readonly Color CraneGold = Color.FromArgb(250, 199, 117);
+    static readonly Color CraneGoldDeep = Color.FromArgb(239, 159, 39);
+    static readonly Color CraneBlue = Color.FromArgb(133, 183, 235);
+    static readonly Color CraneBlueDeep = Color.FromArgb(55, 138, 221);
+    static readonly Color CraneRed = Color.FromArgb(240, 149, 149);
 
     /* -------------------------------------------------------------- *
      * Planets: one for each task that is running or waits on you
