@@ -74,7 +74,7 @@ It gives prompt-level advice only. Follow-ups, thread length and the new-chat su
 
 **One task board for everything**
 
-Left-click the tray icon for one list of every Claude and ChatGPT task on the PC: working, done, or waiting for you, with a Windows notification when a task finishes or needs you. The list opens just above the taskbar, centred on the button or icon you clicked, the way Windows opens its own menus there, and only as tall as its tasks need. It is grouped into needs you, working and earlier, with a turning spinner on anything still running. Opened from the menu, it sits at the right above the clock, and it keeps clear of the desk pet when the pet is on screen.
+Click the crane's taskbar button, or left-click the tray icon, for one list of every Claude and ChatGPT task on the PC: working, done, or waiting for you, with a Windows notification when a task finishes or needs you. The list opens just above the taskbar, centred on the button or icon you clicked, the way Windows opens its own menus there, and only as tall as its tasks need. It is grouped into needs you, working and earlier, with a turning spinner on anything still running. Opened from the menu, it sits at the right above the clock, and it keeps clear of the desk pet when the pet is on screen.
 
 ![The task list open above its taskbar button, with one task running and one finished](docs/screenshots/task-list.png)
  Click a task to bring its app forward; click anywhere else or press Esc to close it.
@@ -129,7 +129,7 @@ It draws one frame per screen refresh, timed to Windows' own screen updates: 60 
 
 By default Voidling only appears when there is something to show. It fades in when a task starts, finishes or needs you, and fades out once nothing has run and nothing has waited on you for 30 seconds. A finish you have not clicked keeps it on screen. The tray menu's **Pet** picks between **Show while a task runs**, **Always show** and **Only the taskbar icon**. Its position, sound and mode live in `%LOCALAPPDATA%\PromptAdvisor\pet.txt`.
 
-The tasks live in one button on the taskbar, with your other apps. Its icon is Voidling, redrawn ten times a second while something moves: gold with a bright spot circling while a task runs, steady blue once one finishes, crimson and pulsing when one needs your approval. A badge in its corner counts the tasks running or waiting on you, red when one needs you. The button has no words on it. Rest the pointer on it and a small card names each task, needs you first, then running, then finished, each led by a dot in its colour. It flashes once when a task finishes or needs you, alongside the Windows notification.
+The tasks live in one button on the taskbar, with your other apps. Its icon is an origami crane, redrawn ten times a second while it moves: gold with its wing beating while a task runs, blue with its wing folded once one finishes, crimson and pulsing when one needs your approval, and folded in dim amber at rest. A badge in its corner counts the tasks running or waiting on you, red when one needs you. The button has no words on it. Rest the pointer on it and a small card names each task, needs you first, then running, then finished, each led by a dot in its colour. It flashes once when a task finishes or needs you, alongside the Windows notification.
 
 ![The hover card: one task needing approval, two running and one finished](docs/screenshots/hover-card.png)
 
@@ -137,9 +137,9 @@ A finish counts as seen two seconds after the card has shown it, or as soon as y
 
 Otherwise the button is there only while something is going on. It appears when a task starts and leaves 30 seconds after the last one ends with nothing waiting on you. Running `desktop\Start.cmd` again while the companion runs opens the task list and brings the button back for a minute.
 
-![The taskbar button while two tasks run, its spot circling, then finished and flashing, finished, and needing you, beside a second button for comparison](docs/screenshots/taskbar-button.png)
+![The crane icon, enlarged and at 24, 30 and 40 pixels, on a dark and a light taskbar: three moments of its wingbeat, two running with the badge, done, needs you, and at rest](docs/screenshots/taskbar-crane.png)
 
-The tray icon stays as the plain Prompt Advisor icon, usually in the overflow behind the ^ arrow, for its menu: **Tasks**, **Pet**, **Taskbar button**, **Pause** and **Exit**. Turning **Taskbar button** off moves the live black hole back into the tray icon, which then comes and goes the same way. With the pet set to **Only the taskbar icon**, nothing appears on the desktop.
+The tray icon stays as the plain Prompt Advisor icon, usually in the overflow behind the ^ arrow, for its menu: **Tasks**, **Pet**, **Taskbar button**, **Pause** and **Exit**. Turning **Taskbar button** off moves the live crane into the tray icon, which then comes and goes the same way. With the pet set to **Only the taskbar icon**, nothing appears on the desktop.
 
 ---
 
@@ -151,7 +151,7 @@ The tray icon stays as the plain Prompt Advisor icon, usually in the overflow be
 4. Click **Load unpacked** and choose the repository folder
 5. Reload any open Claude or ChatGPT tab
 
-Three permissions are requested. `http://127.0.0.1:47823/*` points at your own PC, so the extension can tell the desktop task board when a reply finishes. `https://claude.ai/*` lets its background script read your ten latest conversations' names and states, at most every 30 seconds and only while the Claude app is open or a run is going, with your own claude.ai sign-in, so a chat finishing in the minimized desktop app is still noticed; it reads nothing from inside a conversation. `alarms` and `storage` time that check and remember what it saw last. Its content scripts only run on the sites listed in the manifest.
+Four permissions are requested. `http://127.0.0.1:47823/*` points at your own PC, so the extension can tell the desktop task board when a reply finishes. `https://claude.ai/*` lets its background script read your ten latest conversations' names and states with your own claude.ai sign-in, so a chat finishing in the minimized desktop app is still noticed. It checks about every 15 seconds while a Claude run is going, every two minutes while the Claude app is open and quiet, and not at all while the app is closed, and it reads nothing from inside a conversation. On a Claude Code page with a run open, the tab itself also asks claude.ai whether that page's agent is idle or waiting for approval, every 20 seconds, or once a minute in a background tab. `alarms` and `storage` time the background check and remember what it saw last. Its content scripts only run on the sites listed in the manifest.
 
 ## Install as userscripts instead
 
@@ -168,13 +168,13 @@ Needs Windows and Node.js.
 2. Type in the Claude or ChatGPT desktop app as usual. Hover the hint for the audit behind it, and click it to hide it for that prompt
 3. Right-click the tray icon to pause or exit
 
-To have it start by itself, register it with Task Scheduler rather than the Startup folder. A task can start it at login and again at every unlock, which covers waking from sleep, and it runs outside any other app, so nothing else closing takes it down. A second copy exits at once, so repeated triggers are harmless. The task's action is `conhost.exe --headless powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "<this folder>\desktop\PromptAdvisor.ps1"`, with triggers At log on and On workstation unlock, and the three-day run limit switched off.
+To have it start by itself, register it with Task Scheduler rather than the Startup folder. A task can start it at login and again at every unlock, which covers waking from sleep, and it runs outside any other app, so nothing else closing takes it down. A second copy exits at once, so repeated triggers are harmless. The task's action is `conhost.exe --headless powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "<this folder>\desktop\PromptAdvisor.ps1"`, with triggers At log on, On workstation unlock, and a repeat every 15 minutes that catches a start Windows skipped, and the three-day run limit switched off. Those launches stay quiet. Only `Start.cmd` opens the task list when a copy is already running.
 
 The `conhost --headless` part matters on Windows 11. Without it PowerShell opens in Windows Terminal, which can show a window even when told to hide, and closing that window ends the companion. `Start.cmd` launches the same way.
 
 Each start is noted in `%TEMP%\PromptAdvisor.log`. If it crashes it restarts itself after ten seconds, up to five times.
 
-It is a PowerShell script that compiles `desktop\PromptAdvisor.cs` and `desktop\TaskBoard.cs` in memory, not an exe. Windows 11's Smart App Control blocks unsigned programs built on your own machine, and PowerShell is signed by Microsoft. If it fails to start, the reason is in `%TEMP%\PromptAdvisor.log`.
+It is a PowerShell script that compiles `desktop\PromptAdvisor.cs`, `desktop\TaskBoard.cs` and `desktop\Pet.cs` in memory, not an exe. Windows 11's Smart App Control blocks unsigned programs built on your own machine, and PowerShell is signed by Microsoft. If it fails to start, the reason is in `%TEMP%\PromptAdvisor.log`.
 
 `node desktop\advisor-cli.js --selftest` checks the rules without the apps open.
 
