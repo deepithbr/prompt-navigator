@@ -1155,12 +1155,21 @@ public class TaskBoard
         string key = "acct:" + Str(d, "id");
         string title = Short(Str(d, "title"), 70);
         string state = Str(d, "state");
+        string url = Str(d, "url");
         if (state != "working" && state != "needs" && state != "done") return;
 
-        // The run the Claude app's screen watcher is following, if any.
+        // A row already tied to this conversation by its address, which
+        // holds when claude.ai renames the chat partway through.
         AppWatch w;
         TaskItem twin = null;
-        if (watches.TryGetValue("claude", out w) && w.Running && w.Key != null)
+        if (url.Length > 0)
+            lock (gate)
+                foreach (TaskItem it in items.Values)
+                    if (!it.Key.StartsWith("acct:") && it.Url == url
+                        && (it.State == "working" || it.State == "hidden" || it.State == "needs"))
+                    { twin = it; break; }
+        // The run the Claude app's screen watcher is following, if any.
+        if (watches.TryGetValue("claude", out w) && w.Running && w.Key != null && twin == null)
             lock (gate) items.TryGetValue(w.Key, out twin);
         // Or a Brave tab or app row with the same chat name, recently.
         if (twin == null)
@@ -1175,16 +1184,22 @@ public class TaskBoard
         {
             // Out of sight on screen, finished on claude.ai: this is the news.
             // Hidden means you were not looking at it, so it always alerts.
-            if (state == "done" && (twin.State == "working" || twin.State == "hidden"))
+            // A request for approval that has since been answered and run to
+            // the end finishes too, quietly, since you were there to answer.
+            if (state == "done" && (twin.State == "working" || twin.State == "hidden" || twin.State == "needs"))
             {
-                bool quiet = twin.State != "hidden" && ChatInView();
+                bool quiet = twin.State == "needs" || (twin.State != "hidden" && ChatInView());
                 if (w != null && w.Key == twin.Key) { w.Running = false; w.Blind = false; }
-                Upsert(twin.Key, twin.Source, title, "done", "", twin.App, quiet);
+                Upsert(twin.Key, twin.Source, title, "done", url, twin.App, quiet);
             }
             // claude.ai says it is still going, or going again, though the
             // screen had it as finished: believe claude.ai.
             else if ((state == "working" || state == "needs") && twin.State != "working" && twin.State != "hidden" && twin.State != state)
-                Upsert(twin.Key, twin.Source, title, state, "", twin.App, state == "working");
+                Upsert(twin.Key, twin.Source, title, state, url, twin.App, state == "working");
+            // Still the same state: remember the conversation's address all
+            // the same, so a later report finds this row under a new name.
+            else if (url.Length > 0 && twin.Url != url)
+                lock (gate) twin.Url = url;
             // Either way the twin carries it; a row of the account's own,
             // made before the twin appeared, goes.
             bool dropped;
