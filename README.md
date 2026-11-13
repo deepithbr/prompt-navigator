@@ -143,6 +143,18 @@ The tray icon stays as the plain Prompt Advisor icon, usually in the overflow be
 
 ---
 
+## Set up on a new PC
+
+Everything, the browser extension and the desktop companion, comes from this one folder. On a new Windows PC:
+
+1. Install [Brave](https://brave.com) or Chrome, sign in to claude.ai there, and install [Node.js](https://nodejs.org) LTS. Node runs the model hints; the task board and the crane work without it
+2. Get this folder. Either run `git clone https://github.com/deepithbr/prompt-navigator.git` in your user folder, or on GitHub choose **Code**, **Download ZIP** and unzip it somewhere it will stay, such as `C:\Users\<you>\prompt-navigator`
+3. Double-click `Install.cmd` in that folder
+
+`Install.cmd` checks Node and that the companion compiles on the PC, registers the **Prompt Advisor** task that starts it at log on, at every unlock and every 15 minutes, adds the three Claude Code hooks to `~/.claude/settings.json` without touching anything else there, starts the companion, and opens the browser's extensions page with the folder's path already copied. That page is the one step Windows does not allow a script to do: turn on **Developer mode**, click **Load unpacked**, paste the path and press **Select Folder**. Each step prints ok, or what to fix. Running it again is safe, and is also how you update: pull or unzip the new code over the old, run `Install.cmd`, and press the extension's reload arrow.
+
+Your task history, the pet's position and its mode live in `%LOCALAPPDATA%\PromptAdvisor` and stay with the PC they were made on. `Uninstall.cmd` takes the task and the hooks out again, keeping a backup of the settings file; add `-Purge` to delete the history as well. The extension is removed from the browser's extensions page.
+
 ## Install as a Chrome extension
 
 1. Download or clone this repository
