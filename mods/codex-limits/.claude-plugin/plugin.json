@@ -1,0 +1,6 @@
+{
+  "name": "codex-limits",
+  "version": "0.3.0",
+  "description": "Shows how much of your Codex 5-hour and weekly limits you have used, as a small ring above the prompt, with the details on hover, read from Codex's own session files.",
+  "types": "./types/index.d.ts"
+}
