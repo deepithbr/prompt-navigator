@@ -117,6 +117,17 @@ else {
     if ($LASTEXITCODE -eq 0) { Good "hooks $r in $settings$(if ($r -eq 'added' -and (Test-Path "$settings.bak-prompt-advisor")) { '; the old file is settings.json.bak-prompt-advisor' })" }
     else { Bad "could not update $settings" }
   }
+  # The Codex limits ring, in every Claude Code chat: its folder listed in
+  # CLAUDE_CODE_PLUGIN_DIRS, which each new chat loads mods from.
+  $mod = Join-Path $repo 'mods\codex-limits'
+  $listed = (& $node (Join-Path $desktop 'mods.js') $settings check $mod).Trim()
+  if ($listed -eq 'present') { Good 'Codex limits ring already loads in every chat' }
+  elseif ($DryRun) { Note "would list $mod in CLAUDE_CODE_PLUGIN_DIRS so every chat loads it" }
+  else {
+    $r = (& $node (Join-Path $desktop 'mods.js') $settings add $mod).Trim()
+    if ($LASTEXITCODE -eq 0) { Good "Codex limits ring ${r}, so it loads in every new chat" }
+    else { Bad "could not list the Codex limits mod in $settings" }
+  }
 }
 
 # 5. Start it, or restart it on the code in this folder

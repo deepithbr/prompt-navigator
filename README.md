@@ -143,6 +143,12 @@ The tray icon stays as the plain Prompt Advisor icon, usually in the overflow be
 
 ---
 
+## Codex limits in Claude Code
+
+`mods/codex-limits` is a Claude Code mod that shows how much of your Codex plan you have used, beside Claude's own usage in the Claude Code desktop app. A small two-ring circle sits at the right end of the bar above the prompt: the outer ring is the 5-hour limit, the inner one the week, each green while there is room, amber past 70% and red past 90%. While the cache-clock mod's bar is folded to one line, the ring rides at the end of that line, after its arrow; opened out, the ring has a row of its own. Resting the pointer on the ring opens an overlay with each limit's percentage, a filling bar and when it resets.
+
+It reads the usage Codex writes into its own session files under `~/.codex/sessions`, the newest reading, once a minute and after every turn, so the reset countdowns stay current; the percentages move when Codex runs. It reads nothing else and sends nothing. `Install.cmd` turns it on for every chat by listing its folder in `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`; `Uninstall.cmd` takes it out. `claude plugin test mods/codex-limits` runs its tests.
+
 ## Set up on a new PC
 
 Everything, the browser extension and the desktop companion, comes from this one folder. On a new Windows PC:
@@ -151,7 +157,7 @@ Everything, the browser extension and the desktop companion, comes from this one
 2. Get this folder. Either run `git clone https://github.com/deepithbr/prompt-navigator.git` in your user folder, or on GitHub choose **Code**, **Download ZIP** and unzip it somewhere it will stay, such as `C:\Users\<you>\prompt-navigator`
 3. Double-click `Install.cmd` in that folder
 
-`Install.cmd` checks Node and that the companion compiles on the PC, registers the **Prompt Advisor** task that starts it at log on, at every unlock and every 15 minutes, adds the three Claude Code hooks to `~/.claude/settings.json` without touching anything else there, starts the companion, and opens the browser's extensions page with the folder's path already copied. That page is the one step Windows does not allow a script to do: turn on **Developer mode**, click **Load unpacked**, paste the path and press **Select Folder**. Each step prints ok, or what to fix. Running it again is safe, and is also how you update: pull or unzip the new code over the old, run `Install.cmd`, and press the extension's reload arrow.
+`Install.cmd` checks Node and that the companion compiles on the PC, registers the **Prompt Advisor** task that starts it at log on, at every unlock and every 15 minutes, adds the three Claude Code hooks to `~/.claude/settings.json` without touching anything else there, lists the Codex limits mod in that file's `CLAUDE_CODE_PLUGIN_DIRS` so every new chat loads it, starts the companion, and opens the browser's extensions page with the folder's path already copied. That page is the one step Windows does not allow a script to do: turn on **Developer mode**, click **Load unpacked**, paste the path and press **Select Folder**. Each step prints ok, or what to fix. Running it again is safe, and is also how you update: pull or unzip the new code over the old, run `Install.cmd`, and press the extension's reload arrow.
 
 Your task history, the pet's position and its mode live in `%LOCALAPPDATA%\PromptAdvisor` and stay with the PC they were made on. `Uninstall.cmd` takes the task and the hooks out again, keeping a backup of the settings file; add `-Purge` to delete the history as well. The extension is removed from the browser's extensions page.
 

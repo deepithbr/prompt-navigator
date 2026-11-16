@@ -1,1 +1,4 @@
 *.zip
+
+# What Claude Code writes beside a mod it has loaded, for the editor.
+mods/*/.claude-plugin/types/

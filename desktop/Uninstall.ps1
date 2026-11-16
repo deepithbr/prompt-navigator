@@ -32,6 +32,13 @@ elseif (-not $node) { Note "Node.js not found: remove the three hooks that post 
 elseif ($DryRun) { Note ("hooks are " + (& $node (Join-Path $desktop 'hooks.js') $settings check).Trim() + "; would remove them") }
 else { $r = (& $node (Join-Path $desktop 'hooks.js') $settings remove).Trim(); Good "hooks $r in $settings" }
 
+# The Codex limits ring: no longer loaded in new chats.
+$mod = Join-Path (Split-Path -Parent $desktop) 'mods\codex-limits'
+if ((Test-Path $settings) -and $node) {
+  if ($DryRun) { Note ("Codex limits ring is " + (& $node (Join-Path $desktop 'mods.js') $settings check $mod).Trim() + " in CLAUDE_CODE_PLUGIN_DIRS; would take it out") }
+  else { $r = (& $node (Join-Path $desktop 'mods.js') $settings remove $mod).Trim(); Good "Codex limits ring $r from new chats" }
+}
+
 $data = Join-Path $env:LOCALAPPDATA 'PromptAdvisor'
 if (-not $Purge) { Note "task history and pet settings kept in $data (run with -Purge to remove them)" }
 elseif ($DryRun) { Note "would delete $data" }
