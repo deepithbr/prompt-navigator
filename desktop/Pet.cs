@@ -422,7 +422,10 @@ public class PetForm : Form
         alerts.RemoveAll(delegate (TaskItem a)
         {
             TaskItem now;
-            return !byKey.TryGetValue(a.Key, out now) || now.State == "working";
+            // A request that is no longer one (opened, answered, expired)
+            // goes as well.
+            return !byKey.TryGetValue(a.Key, out now) || now.State == "working"
+                || (a.State == "needs" && now.State != "needs");
         });
         // A request that still waits on you is shown, even if its alert was
         // lost to a restart, unless you put it away yourself.

@@ -154,7 +154,11 @@ public class TaskBoard
             // A web tab that stopped reporting mid-task was closed or crashed.
             foreach (TaskItem it in items.Values)
                 if ((it.State == "working" && it.Source.EndsWith("in Brave") && (DateTime.Now - it.Updated).TotalMinutes > 3)
-                    || (it.State == "hidden" && (DateTime.Now - it.Updated).TotalHours > 3))
+                    || (it.State == "hidden" && (DateTime.Now - it.Updated).TotalHours > 3)
+                    // A request three hours old was left behind: its session
+                    // stopped waiting, or it was answered somewhere that never
+                    // said so.
+                    || (it.State == "needs" && (DateTime.Now - it.Updated).TotalHours > 3))
                     it.State = "lost";
             List<TaskItem> all = new List<TaskItem>(items.Values);
             all.Sort(delegate (TaskItem a, TaskItem b) { return b.Updated.CompareTo(a.Updated); });
@@ -260,6 +264,9 @@ public class TaskBoard
     public void Open(TaskItem it)
     {
         if (it == null) return;
+        // Opening a request is seeing it: it leaves Needs you, quietly. If
+        // its session carries on, its next report puts it back where it is.
+        if (it.State == "needs") Upsert(it.Key, it.Source, it.Title, "done", "", it.App, true);
         string url = it.Url ?? "";
         try
         {
@@ -553,7 +560,11 @@ public class TaskBoard
             string source = folder.Length > 0 && !folder.StartsWith("scratch-") ? "Claude Code \u00B7 " + folder : "Claude Code";
             lock (gate)
             {
-                string asked = what == "start" ? CleanPrompt(Str(d, "prompt")) : "";
+                // A turn the app started by itself, to deliver a background
+                // task's result or another session's message, is no prompt of
+                // yours: the task keeps the name your last prompt gave it.
+                string raw = what == "start" ? Str(d, "prompt") : "";
+                string asked = Automated(raw) ? "" : CleanPrompt(raw);
                 if (asked.Length > 0) sessionTitles[sid] = Short(asked, 70);
                 if (!sessionTitles.TryGetValue(sid, out title)) title = folder.Length > 0 ? folder : "Session";
             }
@@ -1219,6 +1230,17 @@ public class TaskBoard
     static readonly Regex Wrapped = new Regex(
         @"<(?<t>system-reminder|pasted_content|local-command-[a-z-]+|command-message|command-args)\b[^>]*>[\s\S]*?(</\k<t>>|$)",
         RegexOptions.IgnoreCase);
+
+    // A prompt the app wrote, not you: a background task's or a side
+    // session's notice, which opens with its own tag.
+    static readonly Regex AutomatedOpening = new Regex(
+        @"^\s*(<(task-notification|side-sessions-event|ci-monitor-event|teammate-message|system-reminder)\b|\[SYSTEM NOTIFICATION)",
+        RegexOptions.IgnoreCase);
+
+    static bool Automated(string p)
+    {
+        return !string.IsNullOrEmpty(p) && AutomatedOpening.IsMatch(p);
+    }
 
     static string CleanPrompt(string p)
     {
